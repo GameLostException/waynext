@@ -726,16 +726,23 @@ class WayNextWindow(Gtk.Window):
         left_btn.set_child(left_box)
         box.append(left_btn)
 
-        # Visio button
-        visio_btn = Gtk.Button(label=m.visio_icon)
+        # Visio open button — 󰏌 open-in-new icon
+        visio_btn = Gtk.Button(label="󰏌")
         visio_btn.add_css_class("wn-visio-btn")
         visio_btn.add_css_class("flat")
+        # Copy-to-clipboard button — 󰆏 content-copy icon
+        copy_btn = Gtk.Button(label="󰆏")
+        copy_btn.add_css_class("wn-visio-btn")
+        copy_btn.add_css_class("flat")
         if m.visio_url:
             visio_btn.connect("clicked", lambda _b, url=m.visio_url: self._open_url(url))
+            copy_btn.connect("clicked", lambda _b, url=m.visio_url: self._copy_to_clipboard(url))
         else:
-            visio_btn.add_css_class("wn-visio-btn-grey")
-            visio_btn.set_sensitive(False)
+            for btn in (visio_btn, copy_btn):
+                btn.add_css_class("wn-visio-btn-grey")
+                btn.set_sensitive(False)
         box.append(visio_btn)
+        box.append(copy_btn)
 
         lbr.set_child(box)
         lbr.set_activatable(False)
@@ -993,6 +1000,30 @@ class WayNextWindow(Gtk.Window):
         return False
 
     # ── Utilities ─────────────────────────────────────────────────────────────
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        """Copy text to Wayland clipboard via wl-copy, fall back to xclip."""
+        log.info("copy to clipboard: %s", text)
+        def _do() -> None:
+            try:
+                subprocess.run(
+                    ["wl-copy", text],
+                    check=True, timeout=3,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                log.info("copied via wl-copy")
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                try:
+                    proc = subprocess.Popen(
+                        ["xclip", "-selection", "clipboard"],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+                    proc.communicate(input=text.encode(), timeout=3)
+                    log.info("copied via xclip")
+                except Exception as e:
+                    log.error("clipboard copy failed: %s", e)
+        threading.Thread(target=_do, daemon=True).start()
 
     def _open_url(self, url: str) -> None:
         log.info("_open_url: %s", url)

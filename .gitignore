@@ -24,5 +24,6 @@ Thumbs.db
 
 # Credentials — NEVER commit these
 credentials.json
+client_secret.json
 token.json
 config.yaml

@@ -93,14 +93,28 @@ log = logging.getLogger("waynext")
 APP_ID        = "io.github.waynext"
 CONFIG_DIR    = Path.home() / ".config" / "waynext"
 CONFIG_FILE   = CONFIG_DIR / "config.yaml"
-CREDS_FILE    = CONFIG_DIR / "credentials.json"
-TOKEN_FILE    = CONFIG_DIR / "token.json"
 SOCKET_PATH   = Path(f"/tmp/waynext-{os.getuid()}.sock")
 
 SCOPES        = ["https://www.googleapis.com/auth/calendar.readonly"]
 CACHE_TTL_SEC = 60          # re-fetch at most once per minute
 POPUP_WIDTH   = 320
 MARGIN_TOP    = 0
+
+# ── OAuth client secret ───────────────────────────────────────────────────────
+# Never committed to git — only client_secret.template.json is tracked.
+#
+# To set up authentication:
+#   cp client_secret.template.json ~/.config/waynext/client_secret.json
+#   Fill in client_id and client_secret from your Google Cloud project.
+#   Then click "Sign in with Google" in the waynext settings panel.
+#
+# The refresh token is stored in TOKEN_FILE after first auth and reused
+# automatically. It grants read-only calendar access and can be revoked
+# at any time via https://myaccount.google.com/permissions
+#
+# See README.md § Authentication for full step-by-step instructions.
+CLIENT_SECRET_FILE = CONFIG_DIR / "client_secret.json"
+TOKEN_FILE         = CONFIG_DIR / "token.json"
 
 # Visio provider patterns → Nerd Font icons
 VISIO_PATTERNS: list[tuple[str, str]] = [
@@ -272,7 +286,7 @@ class CalWorker:
                 # Immediately fetch events now that we're authed
                 self._do_fetch()
             except FileNotFoundError:
-                GLib.idle_add(on_done, False, "credentials.json not found in ~/.config/waynext/")
+                GLib.idle_add(on_done, False, "client_secret.json not found — see README § Authentication")
             except Exception as e:
                 GLib.idle_add(on_done, False, str(e))
         threading.Thread(target=_do, daemon=True).start()
@@ -332,9 +346,13 @@ class CalWorker:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
-                if not CREDS_FILE.exists():
-                    raise FileNotFoundError(f"credentials.json not found at {CREDS_FILE}")
-                flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_FILE), SCOPES)
+                if not CLIENT_SECRET_FILE.exists():
+                    raise FileNotFoundError(
+                        f"client_secret.json not found at {CLIENT_SECRET_FILE}\n"
+                        f"Copy client_secret.template.json → {CLIENT_SECRET_FILE} "
+                        f"and fill in your client_id and client_secret."
+                    )
+                flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
                 creds = flow.run_local_server(port=0)
 
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -717,7 +735,7 @@ class WayNextWindow(Gtk.Window):
             self._auth_status_lbl.remove_css_class("wn-auth-status-ok")
             self._auth_status_lbl.add_css_class("wn-auth-status-error")
         else:
-            self._auth_status_lbl.set_text("Not signed in — credentials.json required in ~/.config/waynext/")
+            self._auth_status_lbl.set_text("Not signed in — place client_secret.json in ~/.config/waynext/")
         auth_box.append(self._auth_status_lbl)
 
         outer.append(auth_box)

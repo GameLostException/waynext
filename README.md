@@ -14,9 +14,50 @@ colour-codes the icon based on attendee composition of the next meeting.
 - Click visio icon → opens the video call link directly
 - Inline settings panel: configure lookahead window, domain, and colours
 
-## Installation
+## Authentication
 
-### 1. Dependencies
+waynext uses Google OAuth2 with an "installed app" client secret. The flow is:
+
+1. You place a `client_secret.json` in `~/.config/waynext/`
+2. Click **Sign in with Google** in the settings panel (⚙ icon)
+3. A browser window opens for Google's consent screen — approve it
+4. waynext saves a refresh token to `~/.config/waynext/token.json`
+5. Done — token is reused automatically and silently refreshed forever
+
+**`client_secret.json` is never committed to git** — only `client_secret.template.json`
+is tracked, as a structural reference.
+
+### Option A — Reuse an existing Google OAuth client (recommended)
+
+If you have another app on this machine with a registered OAuth client
+(e.g. Syncopath), copy its `client_secret.json`:
+
+```bash
+cp ~/.config/syncopath/client_secret.json ~/.config/waynext/client_secret.json
+```
+
+Then click **Sign in with Google**. You may be asked to grant Calendar access
+in addition to any existing permissions.
+
+### Option B — Create your own Google Cloud client
+
+1. Go to https://console.cloud.google.com/
+2. Create a project → **APIs & Services → Enable APIs** → enable **Google Calendar API**
+3. **APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID**
+   - Application type: **Desktop app**
+   - Name: anything (e.g. "waynext")
+4. Download the JSON → save as `~/.config/waynext/client_secret.json`
+5. Click **Sign in with Google** in the settings panel
+
+### Security notes
+
+- `client_secret.json` and `token.json` are in `.gitignore` — they are never committed
+- OAuth scope is **read-only** (`calendar.readonly`) — waynext cannot modify your calendar
+- The refresh token grants read access to your calendar and can be revoked at any time:
+  https://myaccount.google.com/permissions
+- The client_secret identifies the *application*, not your account — see SPEC.md § Security
+
+
 
 **Arch:**
 ```bash
@@ -31,14 +72,7 @@ sudo apt install libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev \
 pip install --user google-api-python-client google-auth-oauthlib google-auth-httplib2
 ```
 
-### 2. Google Cloud credentials
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a project → Enable the **Google Calendar API**
-3. Create OAuth 2.0 credentials (Desktop application)
-4. Download `credentials.json` and place it at `~/.config/waynext/credentials.json`
-
-### 3. Install
+### 2. Install
 
 ```bash
 git clone https://github.com/GameLostException/waynext.git ~/Lab/waynext
@@ -46,14 +80,12 @@ cd ~/Lab/waynext
 make install
 ```
 
-### 4. First run (OAuth consent)
+### 3. Set up authentication
 
-```bash
-waynext toggle
-```
+See **§ Authentication** above — either copy an existing `client_secret.json` or
+create one from Google Cloud Console. Then click **Sign in with Google** in the
+settings panel (⚙ icon in the popup).
 
-A browser window will open for Google Calendar OAuth consent. After approving,
-the token is stored at `~/.config/waynext/token.json` and refreshed automatically.
 
 ## Waybar configuration
 
@@ -108,6 +140,8 @@ waynext restart   Kill daemon and restart
 
 ## Security
 
-- `credentials.json` and `token.json` are in `.gitignore` and never committed
+- `client_secret.json` and `token.json` are in `.gitignore` and never committed
+- Only `client_secret.template.json` (empty placeholder) is tracked in git
 - OAuth scope is read-only: `calendar.readonly`
 - No credentials or domain-specific configuration in source code
+- Revoke access at any time: https://myaccount.google.com/permissions

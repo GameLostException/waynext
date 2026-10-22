@@ -74,7 +74,7 @@ Colours are written to the CSS by the daemon whenever settings change.
 
 ## 4. Icon Colour Logic
 
-Colour is determined by the **next single meeting** within the lookahead window:
+Colour is determined by the **next single upcoming meeting** (first meeting that hasn't started yet) within the lookahead window:
 
 | State | Condition | Default colour |
 |---|---|---|

@@ -972,26 +972,43 @@ class WayNextWindow(Gtk.Window):
 
     def _open_url(self, url: str) -> None:
         log.info("_open_url: %s", url)
-        # Double-fork + strip GTK env vars so Firefox/Chrome don't inherit our
-        # GTK4 process environment which causes gdk_display_manager_get() crash.
-        pid = os.fork()
-        if pid == 0:
-            if os.fork() == 0:
-                os.setsid()
-                # Close all file descriptors
-                for fd in range(3, 256):
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
-                # Strip GTK/GDK vars that conflict with Firefox/Chrome init
-                for var in list(os.environ.keys()):
-                    if var.startswith(("GTK_", "GDK_", "GIO_", "GSETTINGS_",
-                                       "LD_PRELOAD", "G_", "GLIB_")):
-                        del os.environ[var]
-                os.execlp("xdg-open", "xdg-open", url)
-            os._exit(0)
-        os.waitpid(pid, 0)
+
+        # Build a clean environment — do NOT inherit from os.environ because
+        # LD_PRELOAD=libgtk4-layer-shell.so is set and causes Firefox/Chrome
+        # to crash with "gdk_display_manager_get() before gtk_init()".
+        uid = os.getuid()
+        clean_env = {
+            "HOME":                    str(Path.home()),
+            "USER":                    os.environ.get("USER", ""),
+            "PATH":                    os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "WAYLAND_DISPLAY":         os.environ.get("WAYLAND_DISPLAY", "wayland-1"),
+            "DISPLAY":                 os.environ.get("DISPLAY", ""),
+            "XDG_RUNTIME_DIR":         os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}"),
+            "XDG_SESSION_TYPE":        os.environ.get("XDG_SESSION_TYPE", "wayland"),
+            "XDG_CURRENT_DESKTOP":     os.environ.get("XDG_CURRENT_DESKTOP", "Hyprland"),
+            "XDG_SESSION_DESKTOP":     os.environ.get("XDG_SESSION_DESKTOP", "Hyprland"),
+            "DBUS_SESSION_BUS_ADDRESS": os.environ.get(
+                "DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus"
+            ),
+            "MOZ_ENABLE_WAYLAND":      "1",
+        }
+        # Remove empty values
+        clean_env = {k: v for k, v in clean_env.items() if v}
+
+        def _launch() -> None:
+            try:
+                subprocess.Popen(
+                    ["xdg-open", url],
+                    env=clean_env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                log.info("xdg-open launched cleanly")
+            except Exception as e:
+                log.error("xdg-open error: %s", e)
+
+        threading.Thread(target=_launch, daemon=True).start()
         self._do_hide()
 
     def poll(self) -> None:

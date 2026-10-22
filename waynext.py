@@ -332,7 +332,9 @@ class CalWorker:
             except FileNotFoundError:
                 GLib.idle_add(
                     lambda: (
-                        on_done(False, "client_secret.json not found — see README § Authentication"),
+                        on_done(
+                            False, "client_secret.json not found — see README § Authentication"
+                        ),
                         False,
                     )[1]
                 )
@@ -455,10 +457,10 @@ class CalWorker:
             end_raw = ev.get("end", {})
 
             start = _parse_dt(start_raw)
-            end = _parse_dt(end_raw)
+            end_dt = _parse_dt(end_raw)
             if start is None:
                 continue
-            end = end if end is not None else start  # type: ignore[assignment]
+            end: datetime = end_dt if end_dt is not None else start
 
             visio_url, visio_icon = extract_visio(ev)
 

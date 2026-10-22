@@ -972,23 +972,23 @@ class WayNextWindow(Gtk.Window):
 
     def _open_url(self, url: str) -> None:
         log.info("_open_url: %s", url)
-        # Gtk.show_uri handles Wayland focus correctly and raises the browser window.
-        # Falls back to xdg-open in a detached thread if that fails.
-        try:
-            Gtk.show_uri(None, url, Gdk.CURRENT_TIME)
-            log.info("Gtk.show_uri launched")
-        except Exception as e:
-            log.warning("Gtk.show_uri failed (%s) — falling back to xdg-open", e)
-            env = {**os.environ}
-            env.setdefault("WAYLAND_DISPLAY", "wayland-1")
-            env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-            env.setdefault("DBUS_SESSION_BUS_ADDRESS",
-                           f"unix:path=/run/user/{os.getuid()}/bus")
-            def _launch() -> None:
-                subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL, env=env,
-                                  start_new_session=True)
-            threading.Thread(target=_launch, daemon=True).start()
+        # Use double-fork to fully detach the browser from our process.
+        # Firefox/Chrome inherit our GTK4 environment and crash if launched
+        # as direct subprocesses — double-fork breaks the parent-child link.
+        pid = os.fork()
+        if pid == 0:
+            # Child: fork again so grandchild is reparented to init
+            if os.fork() == 0:
+                # Grandchild: exec browser, fully detached
+                os.setsid()
+                for fd in range(3, 256):
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                os.execlp("xdg-open", "xdg-open", url)
+            os._exit(0)
+        os.waitpid(pid, 0)  # reap child immediately
         self._do_hide()
 
     def poll(self) -> None:

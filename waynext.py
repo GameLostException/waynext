@@ -323,18 +323,21 @@ class CalWorker:
         on_done(success: bool, message: str) is called on the GTK thread when done.
         """
 
-        def _do():
+        def _do() -> None:
             try:
                 _service, account = self._build_service()
-                GLib.idle_add(on_done, True, account)
+                GLib.idle_add(lambda: (on_done(True, account), False)[1])
                 # Immediately fetch events now that we're authed
                 self._do_fetch()
             except FileNotFoundError:
                 GLib.idle_add(
-                    on_done, False, "client_secret.json not found — see README § Authentication"
+                    lambda: (
+                        on_done(False, "client_secret.json not found — see README § Authentication"),
+                        False,
+                    )[1]
                 )
             except Exception as e:
-                GLib.idle_add(on_done, False, str(e))
+                GLib.idle_add(lambda: (on_done(False, str(e)), False)[1])
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -454,7 +457,7 @@ class CalWorker:
             end = _parse_dt(end_raw)
             if start is None:
                 continue
-            end = end if end is not None else start
+            end = end if end is not None else start  # type: ignore[assignment]
 
             visio_url, visio_icon = extract_visio(ev)
 
@@ -499,7 +502,7 @@ class CalWorker:
             tmp.rename(state_file)
         except Exception as e:
             log.warning("Failed to write state file: %s", e)
-        GLib.idle_add(self._on_update, state)
+        GLib.idle_add(lambda: (self._on_update(state), False)[1])
 
 
 def _parse_dt(raw: dict) -> datetime | None:
@@ -941,7 +944,6 @@ class WayNextWindow(Gtk.Window):
                 self._auth_status_lbl.remove_css_class("wn-auth-status-ok")
                 self._auth_status_lbl.add_css_class("wn-auth-status-error")
                 self._auth_status_lbl.set_text(f"Error: {message}")
-            return False  # GLib.idle_add
 
         self._cal.authenticate(_on_done)
 
@@ -965,10 +967,9 @@ class WayNextWindow(Gtk.Window):
 
     # ── Calendar update callback (GTK thread) ─────────────────────────────────
 
-    def _on_cal_update(self, state: CalState) -> bool:
+    def _on_cal_update(self, state: CalState) -> None:
         self._refresh_status(state)
         self._refresh_meetings(state)
-        return False  # GLib.idle_add must return False to fire only once
 
     def _refresh_status(self, state: CalState) -> None:
         if state.status == "ok":

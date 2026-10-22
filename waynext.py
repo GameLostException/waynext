@@ -460,7 +460,7 @@ class CalWorker:
             end_dt = _parse_dt(end_raw)
             if start is None:
                 continue
-            end: datetime = end_dt if end_dt is not None else start
+            ev_end: datetime = end_dt if end_dt is not None else start
 
             visio_url, visio_icon = extract_visio(ev)
 
@@ -469,7 +469,7 @@ class CalWorker:
                     event_id=ev.get("id", ""),
                     summary=ev.get("summary", "(No title)"),
                     start=start,
-                    end=end,
+                    end=ev_end,
                     html_link=ev.get("htmlLink", ""),
                     attendees=ev.get("attendees", []),
                     visio_url=visio_url,

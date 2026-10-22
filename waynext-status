@@ -33,10 +33,22 @@ def load_domain() -> str:
     return DEFAULT_DOMAIN
 
 
+def next_meeting(meetings: list[dict]) -> dict | None:
+    """First meeting that hasn't started yet (start > now)."""
+    now = datetime.now(timezone.utc)
+    for m in meetings:
+        try:
+            if (datetime.fromisoformat(m["start"]) - now).total_seconds() > 0:
+                return m
+        except Exception:
+            continue
+    return None
+
+
 def classify(meetings: list[dict], domain: str) -> str:
-    if not meetings:
+    m = next_meeting(meetings)
+    if m is None:
         return "blue"
-    m = meetings[0]
     for a in m.get("attendees", []):
         if (domain not in a.get("email", "")
                 and not a.get("self")
@@ -46,10 +58,11 @@ def classify(meetings: list[dict], domain: str) -> str:
 
 
 def minutes_label(meetings: list[dict]) -> str:
-    if not meetings:
+    m = next_meeting(meetings)
+    if m is None:
         return ""
     try:
-        start = datetime.fromisoformat(meetings[0]["start"])
+        start = datetime.fromisoformat(m["start"])
         now   = datetime.now(timezone.utc)
         mins  = int((start - now).total_seconds() / 60)
         return f"{mins}m" if mins > 0 else ""

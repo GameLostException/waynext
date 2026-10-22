@@ -250,11 +250,20 @@ def is_declined(event: dict) -> bool:
     return False
 
 
+def _next_upcoming(meetings: list[Meeting]) -> Meeting | None:
+    """Return the first meeting that hasn't started yet."""
+    now = datetime.now(timezone.utc)
+    for m in meetings:
+        if (m.start - now).total_seconds() > 0:
+            return m
+    return None
+
+
 def classify_next_meeting(meetings: list[Meeting], domain: str) -> str:
-    """Return waybar CSS class based on next meeting's attendees."""
-    if not meetings:
+    """Return waybar CSS class based on next upcoming meeting's attendees."""
+    m = _next_upcoming(meetings)
+    if m is None:
         return "blue"
-    m = meetings[0]
     if not m.attendees:
         return "orange"
     external = [
@@ -268,15 +277,15 @@ def classify_next_meeting(meetings: list[Meeting], domain: str) -> str:
 
 
 def minutes_label(meetings: list[Meeting]) -> str:
-    """Return minutes until next meeting as a plain number, e.g. '14m'.
+    """Return minutes until next upcoming meeting, e.g. '7m'.
 
-    Always shows total minutes — never hours — so it's unambiguous at a glance.
-    Returns empty string if no meetings or meeting is already in progress.
+    Skips meetings already in progress. Returns '' when nothing is upcoming.
     """
-    if not meetings:
+    m = _next_upcoming(meetings)
+    if m is None:
         return ""
     now = datetime.now(timezone.utc)
-    mins = int((meetings[0].start - now).total_seconds() / 60)
+    mins = int((m.start - now).total_seconds() / 60)
     if mins <= 0:
         return ""
     return f"{mins}m"

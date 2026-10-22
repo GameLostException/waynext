@@ -1023,7 +1023,14 @@ class WayNextWindow(Gtk.Window):
             self._list_box.append(lbr)
             return
 
-        for m in state.meetings:
+        # Show at most 1 past/in-progress meeting (the current one),
+        # then all upcoming meetings.
+        now = datetime.now(timezone.utc)
+        past = [m for m in state.meetings if (m.start - now).total_seconds() <= 0]
+        upcoming = [m for m in state.meetings if (m.start - now).total_seconds() > 0]
+        visible = past[-1:] + upcoming  # last past (current) + all future
+
+        for m in visible:
             self._list_box.append(self._build_meeting_row(m, self._cfg["internal_domain"]))
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────

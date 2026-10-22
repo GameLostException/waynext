@@ -337,7 +337,8 @@ class CalWorker:
                     )[1]
                 )
             except Exception as e:
-                GLib.idle_add(lambda: (on_done(False, str(e)), False)[1])
+                msg = str(e)
+                GLib.idle_add(lambda: (on_done(False, msg), False)[1])
 
         threading.Thread(target=_do, daemon=True).start()
 

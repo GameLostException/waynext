@@ -496,6 +496,13 @@ CSS = """
 .wn-meeting-row:hover {
     background-color: alpha(@accent_bg_color, 0.12);
 }
+.wn-meeting-left-btn {
+    padding: 0;
+    border-radius: 0;
+}
+.wn-meeting-left-btn:hover {
+    background-color: alpha(@accent_bg_color, 0.15);
+}
 .wn-meeting-time {
     font-size: 12px;
     font-weight: bold;
@@ -686,69 +693,53 @@ class WayNextWindow(Gtk.Window):
         lbr = Gtk.ListBoxRow()
         lbr.add_css_class("wn-meeting-row")
 
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
 
-        # Time
         local_time = m.start.astimezone().strftime("%H:%M")
+
+        # ── Meeting row: two buttons side by side ────────────────────────────
+        # Left button (time + topic) → opens Google Calendar event
+        # Right button (visio label) → opens meeting link
+        # Using two separate Buttons avoids all GTK4 gesture propagation issues.
+
+        left_btn = Gtk.Button()
+        left_btn.add_css_class("flat")
+        left_btn.add_css_class("wn-meeting-left-btn")
+        left_btn.set_hexpand(True)
+        left_btn.connect("clicked", lambda _b, link=m.html_link: self._open_url(link))
+
+        left_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
         time_lbl = Gtk.Label(label=local_time)
         time_lbl.add_css_class("wn-meeting-time")
-        box.append(time_lbl)
+        left_box.append(time_lbl)
 
-        # Topic
         topic_lbl = Gtk.Label(label=m.summary)
         topic_lbl.add_css_class("wn-meeting-topic")
         topic_lbl.set_hexpand(True)
         topic_lbl.set_xalign(0)
         topic_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        box.append(topic_lbl)
+        left_box.append(topic_lbl)
 
-        # Visio icon
+        left_btn.set_child(left_box)
+        box.append(left_btn)
+
+        # Visio button
         visio_btn = Gtk.Button(label=m.visio_icon)
         visio_btn.add_css_class("wn-visio-btn")
         visio_btn.add_css_class("flat")
         if m.visio_url:
-            visio_btn.connect(
-                "clicked",
-                lambda _b, url=m.visio_url: self._open_url(url),
-            )
+            visio_btn.connect("clicked", lambda _b, url=m.visio_url: self._open_url(url))
         else:
             visio_btn.add_css_class("wn-visio-btn-grey")
             visio_btn.set_sensitive(False)
         box.append(visio_btn)
 
         lbr.set_child(box)
-
-        # Row click → open calendar event.
-        # Use set_activatable(False) so the ListBoxRow does NOT swallow child
-        # widget events (which would prevent the visio button from receiving clicks).
-        # Instead attach a GestureClick to the box itself, but only fire when
-        # the click is NOT on the visio button.
         lbr.set_activatable(False)
-
-        gesture = Gtk.GestureClick()
-        gesture.connect(
-            "released",
-            lambda g, _n, x, y, link=m.html_link, btn=visio_btn: (
-                self._open_url(link)
-                if not self._click_hits_widget(btn, x, y, lbr)
-                else None
-            ),
-        )
-        box.add_controller(gesture)
+        lbr.set_can_focus(False)
 
         return lbr
-
-    def _click_hits_widget(self, widget: Gtk.Widget, x: float, y: float,
-                            relative_to: Gtk.Widget) -> bool:
-        """Return True if (x, y) in relative_to coords falls inside widget."""
-        try:
-            ok, wx, wy = widget.translate_coordinates(relative_to, 0, 0)
-            if not ok:
-                return False
-            alloc = widget.get_allocation()
-            return wx <= x <= wx + alloc.width and wy <= y <= wy + alloc.height
-        except Exception:
-            return False
 
         return lbr
 

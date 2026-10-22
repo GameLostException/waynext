@@ -1,0 +1,17 @@
+# waynext Python dependencies
+#
+# System packages (preferred over pip):
+#   Arch:          python-gobject python-yaml
+#   Debian/Ubuntu: python3-gi python3-yaml
+#   Fedora:        python3-gobject python3-yaml
+#
+# Google API client — install via pip or system package:
+#   Arch:          python-google-api-python-client python-google-auth-oauthlib
+#   pip:           see below
+#
+# Only use pip if system packages are unavailable:
+PyGObject>=3.42.0
+PyYAML>=6.0
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.1.0

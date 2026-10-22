@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# waynext launcher
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WAYNEXT_PY="${SCRIPT_DIR}/waynext.py"
+
+CMD="${1:-toggle}"
+
+if [[ "$CMD" == "restart" ]]; then
+    pkill -f "waynext.py" 2>/dev/null || true
+    rm -f "/tmp/waynext-$(id -u).sock"
+    sleep 0.3
+    exec python3 "$WAYNEXT_PY" show
+fi
+
+exec python3 "$WAYNEXT_PY" "$CMD"

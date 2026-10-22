@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""
+waynext-status — lightweight waybar exec script.
+
+Reads the state file written by the waynext daemon and prints a waybar JSON
+line with the calendar icon, CSS class, and minutes-until-next-meeting label.
+
+NO GTK imports — runs in <50ms, safe to call every 30s from waybar.
+"""
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+STATE_FILE   = Path(f"/tmp/waynext-state-{os.getuid()}.json")
+CONFIG_FILE  = Path.home() / ".config" / "waynext" / "config.yaml"
+ICON         = "\U000f00ed"   # 󰃭  mdi-calendar
+
+DEFAULT_DOMAIN = "@example.com"
+
+
+def load_domain() -> str:
+    if not CONFIG_FILE.exists():
+        return DEFAULT_DOMAIN
+    try:
+        # Simple line-based parse — avoids importing yaml
+        for line in CONFIG_FILE.read_text().splitlines():
+            if line.strip().startswith("internal_domain"):
+                return line.split(":", 1)[1].strip().strip('"\'')
+    except Exception:
+        pass
+    return DEFAULT_DOMAIN
+
+
+def classify(meetings: list[dict], domain: str) -> str:
+    if not meetings:
+        return "blue"
+    m = meetings[0]
+    for a in m.get("attendees", []):
+        if (domain not in a.get("email", "")
+                and not a.get("self")
+                and a.get("responseStatus") != "declined"):
+            return "red"
+    return "orange"
+
+
+def minutes_label(meetings: list[dict]) -> str:
+    if not meetings:
+        return ""
+    try:
+        start = datetime.fromisoformat(meetings[0]["start"])
+        now   = datetime.now(timezone.utc)
+        mins  = int((start - now).total_seconds() / 60)
+        return f"{mins}m" if mins > 0 else ""
+    except Exception:
+        return ""
+
+
+def main() -> None:
+    if not STATE_FILE.exists():
+        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""},
+                          ensure_ascii=False))
+        return
+
+    try:
+        data     = json.loads(STATE_FILE.read_text())
+        status   = data.get("status", "not_configured")
+        meetings = data.get("meetings", [])
+    except Exception:
+        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""},
+                          ensure_ascii=False))
+        return
+
+    if status != "ok":
+        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""},
+                          ensure_ascii=False))
+        return
+
+    domain     = load_domain()
+    css_class  = classify(meetings, domain)
+    label      = minutes_label(meetings)
+    text       = f"{ICON} {label}" if label else ICON
+
+    print(json.dumps({"text": text, "class": css_class, "tooltip": ""},
+                      ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

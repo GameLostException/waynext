@@ -71,6 +71,8 @@ install: check
 	@echo '# waynext launcher' >> $(BINDIR)/waynext
 	@echo 'exec python3 "$(BINDIR)/waynext.py" "$$@"' >> $(BINDIR)/waynext
 	@chmod +x $(BINDIR)/waynext
+	@cp waynext-status $(BINDIR)/waynext-status
+	@chmod +x $(BINDIR)/waynext-status
 	@echo ""
 	@echo "Installed successfully!"
 	@echo ""

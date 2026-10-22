@@ -260,6 +260,23 @@ class CalWorker:
         """Fetch events in a background thread and post result to GTK."""
         threading.Thread(target=self._do_fetch, daemon=True).start()
 
+    def authenticate(self, on_done: callable) -> None:  # type: ignore[type-arg]
+        """Run OAuth flow in a background thread.
+
+        on_done(success: bool, message: str) is called on the GTK thread when done.
+        """
+        def _do():
+            try:
+                _service, account = self._build_service()
+                GLib.idle_add(on_done, True, account)
+                # Immediately fetch events now that we're authed
+                self._do_fetch()
+            except FileNotFoundError:
+                GLib.idle_add(on_done, False, "credentials.json not found in ~/.config/waynext/")
+            except Exception as e:
+                GLib.idle_add(on_done, False, str(e))
+        threading.Thread(target=_do, daemon=True).start()
+
     def fetch_if_stale(self) -> None:
         with self._lock:
             age = time.time() - self._state.fetched_at
@@ -465,6 +482,17 @@ CSS = """
     padding: 6px 12px 10px 12px;
     border-top: 1px solid alpha(@borders, 0.4);
 }
+.wn-auth-section {
+    padding: 8px 12px;
+    border-bottom: 1px solid alpha(@borders, 0.4);
+}
+.wn-auth-status {
+    font-size: 11px;
+    color: @dim-label-color;
+    font-style: italic;
+}
+.wn-auth-status-ok    { color: #57c75a; font-style: normal; }
+.wn-auth-status-error { color: #cc3333; font-style: normal; }
 """
 
 
@@ -654,6 +682,46 @@ class WayNextWindow(Gtk.Window):
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
+        # ── Google Account section ────────────────────────────────────────────
+        auth_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        auth_box.add_css_class("wn-auth-section")
+
+        auth_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        auth_title = Gtk.Label(label="Google Account")
+        auth_title.add_css_class("wn-settings-label")
+        auth_title.set_xalign(0)
+        auth_title.set_hexpand(True)
+        auth_header.append(auth_title)
+
+        self._auth_btn = Gtk.Button(label="Sign in with Google")
+        self._auth_btn.add_css_class("suggested-action")
+        self._auth_btn.connect("clicked", self._on_auth_click)
+        auth_header.append(self._auth_btn)
+
+        auth_box.append(auth_header)
+
+        # Auth status line — shows current account or error
+        self._auth_status_lbl = Gtk.Label()
+        self._auth_status_lbl.set_xalign(0)
+        self._auth_status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        self._auth_status_lbl.add_css_class("wn-auth-status")
+        state = self._cal.get_state()
+        if state.status == "ok" and state.account:
+            self._auth_status_lbl.set_text(f"Signed in as {state.account}")
+            self._auth_status_lbl.remove_css_class("wn-auth-status-error")
+            self._auth_status_lbl.add_css_class("wn-auth-status-ok")
+            self._auth_btn.set_label("Re-authenticate")
+        elif state.status == "error":
+            self._auth_status_lbl.set_text(state.account or "Auth error")
+            self._auth_status_lbl.remove_css_class("wn-auth-status-ok")
+            self._auth_status_lbl.add_css_class("wn-auth-status-error")
+        else:
+            self._auth_status_lbl.set_text("Not signed in — credentials.json required in ~/.config/waynext/")
+        auth_box.append(self._auth_status_lbl)
+
+        outer.append(auth_box)
+
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         panel.add_css_class("wn-settings-panel")
 
@@ -730,6 +798,31 @@ class WayNextWindow(Gtk.Window):
         self._settings_revealer.set_reveal_child(True)
         # Hide meeting list while settings are open
         self._list_box.set_visible(False)
+
+    def _on_auth_click(self, _btn: Gtk.Button) -> None:
+        """Trigger OAuth flow in background thread."""
+        self._auth_btn.set_label("Opening browser…")
+        self._auth_btn.set_sensitive(False)
+        self._auth_status_lbl.remove_css_class("wn-auth-status-ok")
+        self._auth_status_lbl.remove_css_class("wn-auth-status-error")
+        self._auth_status_lbl.add_css_class("wn-auth-status")
+        self._auth_status_lbl.set_text("Waiting for browser consent…")
+
+        def _on_done(success: bool, message: str) -> None:
+            self._auth_btn.set_sensitive(True)
+            if success:
+                self._auth_btn.set_label("Re-authenticate")
+                self._auth_status_lbl.remove_css_class("wn-auth-status-error")
+                self._auth_status_lbl.add_css_class("wn-auth-status-ok")
+                self._auth_status_lbl.set_text(f"Signed in as {message}")
+            else:
+                self._auth_btn.set_label("Sign in with Google")
+                self._auth_status_lbl.remove_css_class("wn-auth-status-ok")
+                self._auth_status_lbl.add_css_class("wn-auth-status-error")
+                self._auth_status_lbl.set_text(f"Error: {message}")
+            return False  # GLib.idle_add
+
+        self._cal.authenticate(_on_done)
 
     def _close_settings(self, save: bool) -> None:
         self._settings_open = False

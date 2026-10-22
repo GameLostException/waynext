@@ -263,24 +263,18 @@ def classify_next_meeting(meetings: list[Meeting], domain: str) -> str:
 
 
 def minutes_label(meetings: list[Meeting]) -> str:
-    """Return a short label showing minutes until next meeting, e.g. '14m'.
+    """Return minutes until next meeting as a plain number, e.g. '14m'.
 
-    Returns empty string if no meetings or meeting is in progress.
+    Always shows total minutes — never hours — so it's unambiguous at a glance.
+    Returns empty string if no meetings or meeting is already in progress.
     """
     if not meetings:
         return ""
     now = datetime.now(timezone.utc)
-    delta = meetings[0].start - now
-    mins = int(delta.total_seconds() / 60)
-    if mins < 0:
-        return ""          # in progress — don't show negative
-    if mins == 0:
-        return "now"
-    if mins < 60:
-        return f"{mins}m"
-    hours = mins // 60
-    rem   = mins % 60
-    return f"{hours}h{rem:02d}m" if rem else f"{hours}h"
+    mins = int((meetings[0].start - now).total_seconds() / 60)
+    if mins <= 0:
+        return ""
+    return f"{mins}m"
 
 
 def waybar_json(state: CalState, cfg: dict) -> str:
@@ -558,6 +552,8 @@ CSS = """
     font-size: 12px;
     color: #c5c8c6;
 }
+.wn-meeting-topic-orange { color: #f0a500; }
+.wn-meeting-topic-red    { color: #cc3333; }
 .wn-visio-btn {
     padding: 0 4px;
     min-width: 0;
@@ -712,7 +708,7 @@ class WayNextWindow(Gtk.Window):
 
         return row
 
-    def _build_meeting_row(self, m: Meeting) -> Gtk.ListBoxRow:
+    def _build_meeting_row(self, m: Meeting, domain: str) -> Gtk.ListBoxRow:
         lbr = Gtk.ListBoxRow()
         lbr.add_css_class("wn-meeting-row")
 
@@ -738,6 +734,13 @@ class WayNextWindow(Gtk.Window):
         left_box.append(time_lbl)
 
         topic_lbl = Gtk.Label(label=m.summary)
+        topic_lbl.add_css_class("wn-meeting-topic")
+        # Colour title by attendee classification — matches waybar icon logic
+        colour = classify_next_meeting([m], domain)
+        if colour == "red":
+            topic_lbl.add_css_class("wn-meeting-topic-red")
+        elif colour == "orange":
+            topic_lbl.add_css_class("wn-meeting-topic-orange")
         topic_lbl.add_css_class("wn-meeting-topic")
         topic_lbl.set_hexpand(True)
         topic_lbl.set_xalign(0)
@@ -995,7 +998,7 @@ class WayNextWindow(Gtk.Window):
             return
 
         for m in state.meetings:
-            self._list_box.append(self._build_meeting_row(m))
+            self._list_box.append(self._build_meeting_row(m, self._cfg["internal_domain"]))
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────
 

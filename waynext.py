@@ -585,35 +585,13 @@ class WayNextWindow(Gtk.Window):
         self.set_default_size(POPUP_WIDTH, -1)
 
     def _calc_margin_right(self) -> int:
-        """Calculate right margin so popup appears under the waybar icon.
+        """Return right margin so the popup sits flush against the right edge of the bar.
 
-        We anchor to the RIGHT edge and push the popup left by a small fixed
-        margin — just enough to clear the right edge of the bar. The popup
-        is right-aligned to the monitor's right side, matching where the
-        calendar icon sits in the bar.
+        We anchor to the RIGHT edge with a small fixed margin — the calendar
+        icon is always near the right end of the bar, so the popup should
+        always appear at the top-right of the monitor.
         """
-        try:
-            r = subprocess.run(["hyprctl", "cursorpos"], capture_output=True,
-                                text=True, timeout=1)
-            if r.returncode != 0:
-                return 8
-            cursor_x = int(r.stdout.strip().split(",")[0])
-            r2 = subprocess.run(["hyprctl", "monitors", "-j"],
-                                  capture_output=True, text=True, timeout=1)
-            if r2.returncode != 0:
-                return 8
-            import json as _json
-            monitors = _json.loads(r2.stdout)
-            for mon in monitors:
-                mx, mw = mon["x"], mon["width"]
-                if mx <= cursor_x < mx + mw:
-                    # Distance from cursor to right edge of this monitor
-                    dist_right = (mx + mw) - cursor_x
-                    # Margin = that distance so popup's right edge aligns with cursor
-                    return max(dist_right - 4, 4)
-        except Exception:
-            pass
-        return 8
+        return 4
 
     # ── CSS ───────────────────────────────────────────────────────────────────
 
@@ -994,25 +972,23 @@ class WayNextWindow(Gtk.Window):
 
     def _open_url(self, url: str) -> None:
         log.info("_open_url: %s", url)
-        env = {**os.environ}
-        env.setdefault("WAYLAND_DISPLAY", "wayland-1")
-        env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-        env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/bus")
-
-        def _launch() -> None:
-            try:
-                subprocess.Popen(
-                    ["xdg-open", url],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    env=env,
-                    start_new_session=True,   # fully detach from our process group
-                )
-                log.info("xdg-open launched for %s", url)
-            except Exception as e:
-                log.error("xdg-open failed: %s", e)
-
-        threading.Thread(target=_launch, daemon=True).start()
+        # Gtk.show_uri handles Wayland focus correctly and raises the browser window.
+        # Falls back to xdg-open in a detached thread if that fails.
+        try:
+            Gtk.show_uri(None, url, Gdk.CURRENT_TIME)
+            log.info("Gtk.show_uri launched")
+        except Exception as e:
+            log.warning("Gtk.show_uri failed (%s) — falling back to xdg-open", e)
+            env = {**os.environ}
+            env.setdefault("WAYLAND_DISPLAY", "wayland-1")
+            env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+            env.setdefault("DBUS_SESSION_BUS_ADDRESS",
+                           f"unix:path=/run/user/{os.getuid()}/bus")
+            def _launch() -> None:
+                subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, env=env,
+                                  start_new_session=True)
+            threading.Thread(target=_launch, daemon=True).start()
         self._do_hide()
 
     def poll(self) -> None:

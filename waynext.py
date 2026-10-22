@@ -972,23 +972,26 @@ class WayNextWindow(Gtk.Window):
 
     def _open_url(self, url: str) -> None:
         log.info("_open_url: %s", url)
-        # Use double-fork to fully detach the browser from our process.
-        # Firefox/Chrome inherit our GTK4 environment and crash if launched
-        # as direct subprocesses — double-fork breaks the parent-child link.
+        # Double-fork + strip GTK env vars so Firefox/Chrome don't inherit our
+        # GTK4 process environment which causes gdk_display_manager_get() crash.
         pid = os.fork()
         if pid == 0:
-            # Child: fork again so grandchild is reparented to init
             if os.fork() == 0:
-                # Grandchild: exec browser, fully detached
                 os.setsid()
+                # Close all file descriptors
                 for fd in range(3, 256):
                     try:
                         os.close(fd)
                     except OSError:
                         pass
+                # Strip GTK/GDK vars that conflict with Firefox/Chrome init
+                for var in list(os.environ.keys()):
+                    if var.startswith(("GTK_", "GDK_", "GIO_", "GSETTINGS_",
+                                       "LD_PRELOAD", "G_", "GLIB_")):
+                        del os.environ[var]
                 os.execlp("xdg-open", "xdg-open", url)
             os._exit(0)
-        os.waitpid(pid, 0)  # reap child immediately
+        os.waitpid(pid, 0)
         self._do_hide()
 
     def poll(self) -> None:

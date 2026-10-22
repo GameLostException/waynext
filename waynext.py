@@ -993,20 +993,26 @@ class WayNextWindow(Gtk.Window):
     # ── Utilities ─────────────────────────────────────────────────────────────
 
     def _open_url(self, url: str) -> None:
-        # Pass Wayland/display env explicitly — daemon may have been started
-        # with a stripped environment (nohup) lacking WAYLAND_DISPLAY.
-        env = {
-            **os.environ,
-            "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY", "wayland-1"),
-            "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
-            "DBUS_SESSION_BUS_ADDRESS": os.environ.get(
-                "DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/bus"
-            ),
-        }
-        subprocess.Popen(["xdg-open", url],
-                          stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL,
-                          env=env)
+        log.info("_open_url: %s", url)
+        env = {**os.environ}
+        env.setdefault("WAYLAND_DISPLAY", "wayland-1")
+        env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/bus")
+
+        def _launch() -> None:
+            try:
+                subprocess.Popen(
+                    ["xdg-open", url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=env,
+                    start_new_session=True,   # fully detach from our process group
+                )
+                log.info("xdg-open launched for %s", url)
+            except Exception as e:
+                log.error("xdg-open failed: %s", e)
+
+        threading.Thread(target=_launch, daemon=True).start()
         self._do_hide()
 
     def poll(self) -> None:

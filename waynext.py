@@ -234,7 +234,7 @@ def waybar_json(state: CalState, cfg: dict) -> str:
         css_class = classify_next_meeting(state.meetings, cfg["internal_domain"])
         if css_class == "blue":
             css_class = "blue"     # no meetings
-    return json.dumps({"text": "󰃭", "class": css_class, "tooltip": ""})
+    return json.dumps({"text": "󰃭", "class": css_class, "tooltip": ""}, ensure_ascii=False)
 
 
 # ── Google Calendar worker ────────────────────────────────────────────────────
@@ -929,13 +929,13 @@ def cmd_status() -> None:
             else:
                 css_class = classify_next_meeting(meetings, cfg["internal_domain"])
 
-            print(json.dumps({"text": "󰃭", "class": css_class, "tooltip": ""}))
+            print(json.dumps({"text": "󰃭", "class": css_class, "tooltip": ""}, ensure_ascii=False))
             return
         except Exception:
             pass
 
     # No state file or error — show grey (not configured / daemon not running)
-    print(json.dumps({"text": "󰃭", "class": "grey", "tooltip": ""}))
+    print(json.dumps({"text": "󰃭", "class": "grey", "tooltip": ""}, ensure_ascii=False))
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

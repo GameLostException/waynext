@@ -1005,24 +1005,28 @@ class WayNextWindow(Gtk.Window):
                     start_new_session=True,
                 )
                 log.info("xdg-open launched cleanly")
-                # Focus the browser window via Hyprland after a short delay
-                # to let the new tab open before we switch focus.
+                # Focus the browser window via Hyprland after a short delay.
+                # Derive the window class from the default browser's .desktop
+                # file name rather than hardcoding browser names.
                 time.sleep(1.2)
-                browser_class = "firefox"
                 try:
-                    default = subprocess.run(
+                    desktop_file = subprocess.run(
                         ["xdg-settings", "get", "default-web-browser"],
                         capture_output=True, text=True, timeout=2,
-                    ).stdout.strip().lower()
-                    if "chrome" in default:
-                        browser_class = "google-chrome"
-                except Exception:
-                    pass
-                subprocess.run(
-                    ["hyprctl", "dispatch", "focuswindow", f"class:{browser_class}"],
-                    capture_output=True,
-                )
-                log.info("focused %s", browser_class)
+                    ).stdout.strip()
+                    # Desktop file is e.g. "firefox.desktop" or
+                    # "google-chrome.desktop" — strip the extension for the
+                    # window class (Hyprland class typically matches).
+                    window_class = desktop_file.removesuffix(".desktop")
+                    if window_class:
+                        subprocess.run(
+                            ["hyprctl", "dispatch", "focuswindow",
+                             f"class:{window_class}"],
+                            capture_output=True,
+                        )
+                        log.info("focused window class:%s", window_class)
+                except Exception as e:
+                    log.warning("could not focus browser: %s", e)
             except Exception as e:
                 log.error("xdg-open error: %s", e)
 

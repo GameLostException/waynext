@@ -197,10 +197,34 @@ def _deep_merge(base: dict, override: dict) -> dict:
 # ── Calendar business logic ───────────────────────────────────────────────────
 
 def extract_visio(event: dict) -> tuple[Optional[str], str]:
-    """Return (url, icon) for first visio link found, or (None, greyed icon)."""
-    candidates: list[str] = []
+    """Return (url, icon) for first visio link found, or (None, greyed icon).
+
+    Priority:
+    1. conferenceData.entryPoints — covers Teams, Meet, Zoom added via calendar
+    2. hangoutLink — Google Meet shortcut field
+    3. location field URL scan
+    4. description field URL scan
+    """
+    # 1. conferenceData entryPoints
+    for ep in event.get("conferenceData", {}).get("entryPoints", []):
+        if ep.get("entryPointType") == "video":
+            url = ep.get("uri", "")
+            if url:
+                for pattern, icon in VISIO_PATTERNS:
+                    if re.search(pattern, url):
+                        return url, icon
+                return url, "Video"
+
+    # 2. hangoutLink
     if event.get("hangoutLink"):
-        candidates.append(event["hangoutLink"])
+        url = event["hangoutLink"]
+        for pattern, icon in VISIO_PATTERNS:
+            if re.search(pattern, url):
+                return url, icon
+        return url, "Meet"
+
+    # 3 & 4. Scan location then description
+    candidates: list[str] = []
     if event.get("location"):
         candidates.append(event["location"])
     if event.get("description"):
@@ -211,7 +235,7 @@ def extract_visio(event: dict) -> tuple[Optional[str], str]:
             for pattern, icon in VISIO_PATTERNS:
                 if re.search(pattern, url):
                     return url, icon
-    return None, "󰍩"
+    return None, "Video"
 
 
 def is_declined(event: dict) -> bool:
@@ -389,7 +413,7 @@ class CalWorker:
                 timeMax=end.isoformat(),
                 singleEvents=True,
                 orderBy="startTime",
-                fields="items(id,summary,start,end,attendees,hangoutLink,location,description,htmlLink)",
+                fields="items(id,summary,start,end,attendees,hangoutLink,location,description,htmlLink,conferenceData)",
             )
             .execute()
         )

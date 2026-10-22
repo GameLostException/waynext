@@ -718,12 +718,37 @@ class WayNextWindow(Gtk.Window):
 
         lbr.set_child(box)
 
-        # Row click → open calendar event
-        lbr.set_activatable(True)
-        lbr.connect(
-            "activate",
-            lambda _r, link=m.html_link: self._open_url(link),
+        # Row click → open calendar event.
+        # Use set_activatable(False) so the ListBoxRow does NOT swallow child
+        # widget events (which would prevent the visio button from receiving clicks).
+        # Instead attach a GestureClick to the box itself, but only fire when
+        # the click is NOT on the visio button.
+        lbr.set_activatable(False)
+
+        gesture = Gtk.GestureClick()
+        gesture.connect(
+            "released",
+            lambda g, _n, x, y, link=m.html_link, btn=visio_btn: (
+                self._open_url(link)
+                if not self._click_hits_widget(btn, x, y, lbr)
+                else None
+            ),
         )
+        box.add_controller(gesture)
+
+        return lbr
+
+    def _click_hits_widget(self, widget: Gtk.Widget, x: float, y: float,
+                            relative_to: Gtk.Widget) -> bool:
+        """Return True if (x, y) in relative_to coords falls inside widget."""
+        try:
+            ok, wx, wy = widget.translate_coordinates(relative_to, 0, 0)
+            if not ok:
+                return False
+            alloc = widget.get_allocation()
+            return wx <= x <= wx + alloc.width and wy <= y <= wy + alloc.height
+        except Exception:
+            return False
 
         return lbr
 

@@ -728,6 +728,12 @@ class WayNextWindow(Gtk.Window):
         gear_btn.connect("clicked", self._toggle_settings)
         row.append(gear_btn)
 
+        help_btn = Gtk.Button(label="?")
+        help_btn.add_css_class("wn-gear-btn")
+        help_btn.add_css_class("flat")
+        help_btn.connect("clicked", lambda _: self._open_help())
+        row.append(help_btn)
+
         return row
 
     def _build_meeting_row(self, m: Meeting, domain: str) -> Gtk.ListBoxRow:
@@ -894,9 +900,9 @@ class WayNextWindow(Gtk.Window):
         # Colour pickers
         colours = self._cfg["colours"]
         colour_fields = [
-            ("no_meetings", "Colour — no meetings"),
-            ("internal_only", "Colour — internal only"),
-            ("has_externals", "Colour — has externals"),
+            ("no_meetings", "No meeting ahead"),
+            ("internal_only", "Internal meeting"),
+            ("has_externals", "External meeting"),
         ]
         for key, label_text in colour_fields:
             btn = Gtk.ColorButton()
@@ -1017,7 +1023,7 @@ class WayNextWindow(Gtk.Window):
         if not state.meetings:
             lbr = Gtk.ListBoxRow()
             lbr.set_activatable(False)
-            lbl = Gtk.Label(label="No upcoming meetings")
+            lbl = Gtk.Label(label=f"No meetings in the next {self._cfg['lookahead_hours']}h")
             lbl.add_css_class("wn-empty-label")
             lbr.set_child(lbl)
             self._list_box.append(lbr)
@@ -1086,6 +1092,61 @@ class WayNextWindow(Gtk.Window):
                     log.error("clipboard copy failed: %s", e)
 
         threading.Thread(target=_do, daemon=True).start()
+
+    def _open_help(self) -> None:
+        """Render README.md to a temp HTML file and open it in the browser."""
+        readme = Path(__file__).parent / "README.md"
+        if not readme.exists():
+            # Fallback: look relative to the installed binary
+            readme = Path.home() / "Lab" / "waynext" / "README.md"
+        if not readme.exists():
+            log.warning("README.md not found for help page")
+            return
+
+        def _render() -> None:
+            try:
+                import tempfile
+
+                import markdown
+
+                md_text = readme.read_text(encoding="utf-8")
+                body = markdown.markdown(
+                    md_text,
+                    extensions=["fenced_code", "tables", "toc"],
+                )
+                html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WayNext — Help</title>
+<style>
+  body {{ font-family: sans-serif; max-width: 860px; margin: 2em auto;
+         padding: 0 1em; background: #1d1f21; color: #c5c8c6; line-height: 1.6; }}
+  h1, h2, h3 {{ color: #81a2be; border-bottom: 1px solid #373b41; padding-bottom: .3em; }}
+  code {{ background: #282a2e; padding: .15em .4em; border-radius: 3px; font-size: .9em; }}
+  pre {{ background: #282a2e; padding: 1em; border-radius: 5px; overflow-x: auto; }}
+  pre code {{ background: none; padding: 0; }}
+  a {{ color: #8abeb7; }}
+  table {{ border-collapse: collapse; width: 100%; }}
+  th, td {{ border: 1px solid #373b41; padding: .5em .8em; }}
+  th {{ background: #282a2e; }}
+</style>
+</head>
+<body>{body}</body>
+</html>"""
+                tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115
+                    suffix=".html", prefix="waynext-help-", delete=False, mode="w", encoding="utf-8"
+                )
+                with tmp:
+                    tmp.write(html)
+                tmp_path = tmp.name
+                log.info("help HTML written to %s", tmp_path)
+                GLib.idle_add(lambda p=tmp_path: self._open_url(f"file://{p}") or False)
+            except Exception as e:
+                log.error("help render failed: %s", e)
+
+        threading.Thread(target=_render, daemon=True).start()
 
     def _open_url(self, url: str) -> None:
         log.info("_open_url: %s", url)

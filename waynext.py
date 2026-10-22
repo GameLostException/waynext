@@ -262,6 +262,27 @@ def classify_next_meeting(meetings: list[Meeting], domain: str) -> str:
     return "red" if external else "orange"
 
 
+def minutes_label(meetings: list[Meeting]) -> str:
+    """Return a short label showing minutes until next meeting, e.g. '14m'.
+
+    Returns empty string if no meetings or meeting is in progress.
+    """
+    if not meetings:
+        return ""
+    now = datetime.now(timezone.utc)
+    delta = meetings[0].start - now
+    mins = int(delta.total_seconds() / 60)
+    if mins < 0:
+        return ""          # in progress — don't show negative
+    if mins == 0:
+        return "now"
+    if mins < 60:
+        return f"{mins}m"
+    hours = mins // 60
+    rem   = mins % 60
+    return f"{hours}h{rem:02d}m" if rem else f"{hours}h"
+
+
 def waybar_json(state: CalState, cfg: dict) -> str:
     """Produce the JSON line waybar reads from exec."""
     if state.status == "not_configured":
@@ -270,9 +291,9 @@ def waybar_json(state: CalState, cfg: dict) -> str:
         css_class = "grey"
     else:
         css_class = classify_next_meeting(state.meetings, cfg["internal_domain"])
-        if css_class == "blue":
-            css_class = "blue"     # no meetings
-    return json.dumps({"text": "󰃭", "class": css_class, "tooltip": ""}, ensure_ascii=False)
+    label = minutes_label(state.meetings) if state.status == "ok" else ""
+    text  = f"󰃭 {label}" if label else "󰃭"
+    return json.dumps({"text": text, "class": css_class, "tooltip": ""}, ensure_ascii=False)
 
 
 # ── Google Calendar worker ────────────────────────────────────────────────────
@@ -1184,10 +1205,12 @@ def cmd_status() -> None:
 
             if status != "ok":
                 css_class = "grey"
+                label = ""
             else:
                 css_class = classify_next_meeting(meetings, cfg["internal_domain"])
-
-            print(json.dumps({"text": "󰃭", "class": css_class, "tooltip": ""}, ensure_ascii=False))
+                label = minutes_label(meetings)
+            text = f"󰃭 {label}" if label else "󰃭"
+            print(json.dumps({"text": text, "class": css_class, "tooltip": ""}, ensure_ascii=False))
             return
         except Exception:
             pass

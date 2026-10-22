@@ -1005,6 +1005,24 @@ class WayNextWindow(Gtk.Window):
                     start_new_session=True,
                 )
                 log.info("xdg-open launched cleanly")
+                # Focus the browser window via Hyprland after a short delay
+                # to let the new tab open before we switch focus.
+                time.sleep(1.2)
+                browser_class = "firefox"
+                try:
+                    default = subprocess.run(
+                        ["xdg-settings", "get", "default-web-browser"],
+                        capture_output=True, text=True, timeout=2,
+                    ).stdout.strip().lower()
+                    if "chrome" in default:
+                        browser_class = "google-chrome"
+                except Exception:
+                    pass
+                subprocess.run(
+                    ["hyprctl", "dispatch", "focuswindow", f"class:{browser_class}"],
+                    capture_output=True,
+                )
+                log.info("focused %s", browser_class)
             except Exception as e:
                 log.error("xdg-open error: %s", e)
 

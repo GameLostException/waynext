@@ -118,10 +118,10 @@ TOKEN_FILE         = CONFIG_DIR / "token.json"
 
 # Visio provider patterns → Nerd Font icons
 VISIO_PATTERNS: list[tuple[str, str]] = [
-    (r"meet\.google\.com",              "󰊭"),
-    (r"zoom\.us",                       "󰖙"),
-    (r"teams\.microsoft\.com",          "󰊻"),
-    (r"webex\.com|whereby\.com|bluejeans\.com", "󰍩"),
+    (r"meet\.google\.com",              "Meet"),
+    (r"zoom\.us",                       "Zoom"),
+    (r"teams\.microsoft\.com",          "Teams"),
+    (r"webex\.com|whereby\.com|bluejeans\.com", "Video"),
 ]
 VISIO_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 
@@ -149,7 +149,7 @@ class Meeting:
     html_link: str
     attendees: list[dict] = field(default_factory=list)
     visio_url: Optional[str] = None
-    visio_icon: str = "󰍩"
+    visio_icon: str = "Video"
 
 
 @dataclass
@@ -352,8 +352,16 @@ class CalWorker:
                         f"Copy client_secret.template.json → {CLIENT_SECRET_FILE} "
                         f"and fill in your client_id and client_secret."
                     )
+                # Ensure browser-related env vars are set — the daemon may have
+                # been started with a stripped environment (nohup, systemd, etc.)
+                # without WAYLAND_DISPLAY or DISPLAY, which prevents xdg-open
+                # from finding a browser.
+                os.environ.setdefault("WAYLAND_DISPLAY", "wayland-1")
+                os.environ.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+                os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS",
+                                      f"unix:path=/run/user/{os.getuid()}/bus")
                 flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
-                creds = flow.run_local_server(port=0)
+                creds = flow.run_local_server(port=0, open_browser=True)
 
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             TOKEN_FILE.write_text(creds.to_json())
@@ -417,6 +425,29 @@ class CalWorker:
     def _post(self, state: CalState) -> None:
         with self._lock:
             self._state = state
+        # Write state file for the waybar exec subcommand (cmd_status).
+        # Runs in the worker thread — write atomically to avoid partial reads.
+        try:
+            state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")
+            payload = {
+                "status":  state.status,
+                "account": state.account,
+                "meetings": [
+                    {
+                        "id":        m.event_id,
+                        "summary":   m.summary,
+                        "start":     m.start.isoformat(),
+                        "html_link": m.html_link,
+                        "attendees": m.attendees,
+                    }
+                    for m in state.meetings
+                ],
+            }
+            tmp = state_file.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False))
+            tmp.rename(state_file)
+        except Exception as e:
+            log.warning("Failed to write state file: %s", e)
         GLib.idle_add(self._on_update, state)
 
 
@@ -468,20 +499,21 @@ CSS = """
 .wn-meeting-time {
     font-size: 12px;
     font-weight: bold;
-    color: @accent_color;
+    color: #81a2be;
     min-width: 42px;
 }
 .wn-meeting-topic {
     font-size: 12px;
-    color: @label-color;
+    color: #c5c8c6;
 }
 .wn-visio-btn {
     padding: 0 4px;
     min-width: 0;
     min-height: 0;
     border-radius: 4px;
+    font-size: 11px;
 }
-.wn-visio-btn-grey { color: alpha(@label-color, 0.3); }
+.wn-visio-btn-grey { color: alpha(#c5c8c6, 0.3); }
 .wn-empty-label {
     padding: 14px 12px;
     font-size: 12px;
@@ -546,26 +578,35 @@ class WayNextWindow(Gtk.Window):
         self.set_default_size(POPUP_WIDTH, -1)
 
     def _calc_margin_right(self) -> int:
+        """Calculate right margin so popup appears under the waybar icon.
+
+        We anchor to the RIGHT edge and push the popup left by a small fixed
+        margin — just enough to clear the right edge of the bar. The popup
+        is right-aligned to the monitor's right side, matching where the
+        calendar icon sits in the bar.
+        """
         try:
             r = subprocess.run(["hyprctl", "cursorpos"], capture_output=True,
                                 text=True, timeout=1)
             if r.returncode != 0:
-                return 20
+                return 8
             cursor_x = int(r.stdout.strip().split(",")[0])
             r2 = subprocess.run(["hyprctl", "monitors", "-j"],
                                   capture_output=True, text=True, timeout=1)
             if r2.returncode != 0:
-                return 20
+                return 8
             import json as _json
             monitors = _json.loads(r2.stdout)
             for mon in monitors:
                 mx, mw = mon["x"], mon["width"]
                 if mx <= cursor_x < mx + mw:
+                    # Distance from cursor to right edge of this monitor
                     dist_right = (mx + mw) - cursor_x
-                    return max(dist_right - POPUP_WIDTH // 2, 4)
+                    # Margin = that distance so popup's right edge aligns with cursor
+                    return max(dist_right - 4, 4)
         except Exception:
             pass
-        return 20
+        return 8
 
     # ── CSS ───────────────────────────────────────────────────────────────────
 
@@ -936,9 +977,20 @@ class WayNextWindow(Gtk.Window):
     # ── Utilities ─────────────────────────────────────────────────────────────
 
     def _open_url(self, url: str) -> None:
+        # Pass Wayland/display env explicitly — daemon may have been started
+        # with a stripped environment (nohup) lacking WAYLAND_DISPLAY.
+        env = {
+            **os.environ,
+            "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY", "wayland-1"),
+            "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
+            "DBUS_SESSION_BUS_ADDRESS": os.environ.get(
+                "DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/bus"
+            ),
+        }
         subprocess.Popen(["xdg-open", url],
                           stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL)
+                          stderr=subprocess.DEVNULL,
+                          env=env)
         self._do_hide()
 
     def poll(self) -> None:
@@ -1076,6 +1128,10 @@ def main() -> None:
         app.add_window(window)
 
         IPCServer(window)
+
+        # Always fetch on startup so the state file is written immediately —
+        # waybar reads it via `waynext status` and needs it to colour the icon.
+        window._cal.fetch()
 
         if cmd in ("show", "toggle"):
             window.set_visible(True)

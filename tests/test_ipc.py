@@ -1,4 +1,5 @@
 """Tests for WayNext IPC logic."""
+
 from __future__ import annotations
 
 import socket
@@ -6,12 +7,10 @@ import threading
 import time
 from pathlib import Path
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Inline minimal IPC send/receive logic for testing
 # ---------------------------------------------------------------------------
+
 
 def _run_server(sock_path: Path, received: list, stop: threading.Event) -> None:
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -26,7 +25,7 @@ def _run_server(sock_path: Path, received: list, stop: threading.Event) -> None:
                 data = conn.recv(64).decode().strip()
                 received.append(data)
                 conn.close()
-            except socket.timeout:
+            except TimeoutError:
                 continue
     finally:
         srv.close()

@@ -1,13 +1,8 @@
 """Tests for WayNext calendar logic (mocked Google API)."""
+
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
-from typing import Any
-from unittest.mock import MagicMock, patch
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Inline the calendar business logic so tests don't import GTK
@@ -28,8 +23,10 @@ def classify_attendees(attendees: list[dict], domain: str) -> str:
     if not attendees:
         return "orange"  # no attendees = treat as internal
     external = [
-        a for a in attendees
-        if not a.get("self") and domain not in a.get("email", "")
+        a
+        for a in attendees
+        if not a.get("self")
+        and domain not in a.get("email", "")
         and a.get("responseStatus") != "declined"
     ]
     return "red" if external else "orange"
@@ -109,9 +106,7 @@ def test_hangout_link_detected() -> None:
 
 
 def test_zoom_in_description() -> None:
-    event = {
-        "description": "Join here: https://zoom.us/j/123456789"
-    }
+    event = {"description": "Join here: https://zoom.us/j/123456789"}
     result = extract_visio(event)
     assert result is not None
     url, icon = result

@@ -1,12 +1,11 @@
 """Tests for WayNext config module."""
+
 from __future__ import annotations
 
 import textwrap
 from pathlib import Path
 
-import pytest
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # Helpers — inline the config logic so tests don't need GTK
@@ -52,10 +51,12 @@ def test_defaults_when_file_missing(tmp_path: Path) -> None:
 
 def test_partial_override(tmp_path: Path) -> None:
     p = tmp_path / "config.yaml"
-    p.write_text(textwrap.dedent("""\
+    p.write_text(
+        textwrap.dedent("""\
         lookahead_hours: 8
         internal_domain: "@corp.example.com"
-    """))
+    """)
+    )
     cfg = load_config(p)
     assert cfg["lookahead_hours"] == 8
     assert cfg["internal_domain"] == "@corp.example.com"
@@ -65,10 +66,12 @@ def test_partial_override(tmp_path: Path) -> None:
 
 def test_colour_override(tmp_path: Path) -> None:
     p = tmp_path / "config.yaml"
-    p.write_text(textwrap.dedent("""\
+    p.write_text(
+        textwrap.dedent("""\
         colours:
           no_meetings: "#0000ff"
-    """))
+    """)
+    )
     cfg = load_config(p)
     assert cfg["colours"]["no_meetings"] == "#0000ff"
     # Other colours unaffected

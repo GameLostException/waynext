@@ -1,0 +1,13 @@
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# E402: module-level imports not at top — GTK imports must come after LD_PRELOAD re-exec block.
+# BLE001: broad Exception catches are intentional for network/GTK/IPC resilience.
+# PLW1510: subprocess.run check= is explicitly set where needed; omission is intentional.
+# S110: try/except/pass is intentional for IPC and status fallback paths.
+ignore = ["BLE001", "PLW1510", "S110"]
+per-file-ignores = { "waynext.py" = ["E402"] }
+
+[tool.mypy]
+ignore_missing_imports = true

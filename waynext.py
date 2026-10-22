@@ -30,16 +30,17 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo  # noqa: F401 — available for future tz use
 
 # ── Layer-shell preload ──────────────────────────────────────────────────────
 # gtk4-layer-shell must be preloaded before GTK is imported.
 
-def _find_layer_shell_lib() -> Optional[str]:
+
+def _find_layer_shell_lib() -> str | None:
     candidates = [
         "/usr/lib/libgtk4-layer-shell.so",
         "/usr/lib64/libgtk4-layer-shell.so",
@@ -51,6 +52,7 @@ def _find_layer_shell_lib() -> Optional[str]:
             return path
     return None
 
+
 _LAYER_SHELL_LIB = _find_layer_shell_lib()
 
 if _LAYER_SHELL_LIB and _LAYER_SHELL_LIB not in os.environ.get("LD_PRELOAD", ""):
@@ -61,13 +63,13 @@ if _LAYER_SHELL_LIB and _LAYER_SHELL_LIB not in os.environ.get("LD_PRELOAD", "")
             **os.environ,
             "LD_PRELOAD": _LAYER_SHELL_LIB,
             "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY", "wayland-1"),
-            "XDG_RUNTIME_DIR": os.environ.get(
-                "XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"
-            ),
+            "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
         },
     )
 
 # ── GTK imports (after layer-shell preload) ──────────────────────────────────
+# These imports must come after the LD_PRELOAD re-exec block above.
+
 
 import gi
 
@@ -75,9 +77,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gdk, GLib, Gtk, Gtk4LayerShell, Pango
-
 import yaml
+from gi.repository import Adw, Gdk, GLib, Gtk, Gtk4LayerShell, Pango
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 
@@ -90,15 +91,15 @@ log = logging.getLogger("waynext")
 
 # ── Paths & constants ────────────────────────────────────────────────────────
 
-APP_ID        = "io.github.waynext"
-CONFIG_DIR    = Path.home() / ".config" / "waynext"
-CONFIG_FILE   = CONFIG_DIR / "config.yaml"
-SOCKET_PATH   = Path(f"/tmp/waynext-{os.getuid()}.sock")
+APP_ID = "io.github.waynext"
+CONFIG_DIR = Path.home() / ".config" / "waynext"
+CONFIG_FILE = CONFIG_DIR / "config.yaml"
+SOCKET_PATH = Path(f"/tmp/waynext-{os.getuid()}.sock")
 
-SCOPES        = ["https://www.googleapis.com/auth/calendar.readonly"]
-CACHE_TTL_SEC = 60          # re-fetch at most once per minute
-POPUP_WIDTH   = 320
-MARGIN_TOP    = 0
+SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+CACHE_TTL_SEC = 60  # re-fetch at most once per minute
+POPUP_WIDTH = 320
+MARGIN_TOP = 0
 
 # ── OAuth client secret ───────────────────────────────────────────────────────
 # Never committed to git — only client_secret.template.json is tracked.
@@ -114,13 +115,13 @@ MARGIN_TOP    = 0
 #
 # See README.md § Authentication for full step-by-step instructions.
 CLIENT_SECRET_FILE = CONFIG_DIR / "client_secret.json"
-TOKEN_FILE         = CONFIG_DIR / "token.json"
+TOKEN_FILE = CONFIG_DIR / "token.json"
 
 # Visio provider patterns → Nerd Font icons
 VISIO_PATTERNS: list[tuple[str, str]] = [
-    (r"meet\.google\.com",              "Meet"),
-    (r"zoom\.us",                       "Zoom"),
-    (r"teams\.microsoft\.com",          "Teams"),
+    (r"meet\.google\.com", "Meet"),
+    (r"zoom\.us", "Zoom"),
+    (r"teams\.microsoft\.com", "Teams"),
     (r"webex\.com|whereby\.com|bluejeans\.com", "Video"),
 ]
 VISIO_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
@@ -131,36 +132,38 @@ DEFAULT_CONFIG: dict = {
     "lookahead_hours": 4,
     "internal_domain": "@example.com",
     "colours": {
-        "no_meetings":    "#3daee9",
-        "internal_only":  "#f0a500",
-        "has_externals":  "#cc3333",
+        "no_meetings": "#3daee9",
+        "internal_only": "#f0a500",
+        "has_externals": "#cc3333",
         "not_configured": "#888888",
     },
 }
 
 # ── Data classes ──────────────────────────────────────────────────────────────
 
+
 @dataclass
 class Meeting:
-    event_id:  str
-    summary:   str
-    start:     datetime
-    end:       datetime
+    event_id: str
+    summary: str
+    start: datetime
+    end: datetime
     html_link: str
     attendees: list[dict] = field(default_factory=list)
-    visio_url: Optional[str] = None
+    visio_url: str | None = None
     visio_icon: str = "Video"
 
 
 @dataclass
 class CalState:
-    status:   str = "not_configured"   # not_configured | ok | error
-    account:  str = ""
+    status: str = "not_configured"  # not_configured | ok | error
+    account: str = ""
     meetings: list[Meeting] = field(default_factory=list)
     fetched_at: float = 0.0
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
+
 
 def load_config() -> dict:
     """Load config.yaml, filling missing keys with defaults."""
@@ -196,7 +199,8 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 # ── Calendar business logic ───────────────────────────────────────────────────
 
-def extract_visio(event: dict) -> tuple[Optional[str], str]:
+
+def extract_visio(event: dict) -> tuple[str | None, str]:
     """Return (url, icon) for first visio link found, or (None, greyed icon).
 
     Priority:
@@ -254,7 +258,8 @@ def classify_next_meeting(meetings: list[Meeting], domain: str) -> str:
     if not m.attendees:
         return "orange"
     external = [
-        a for a in m.attendees
+        a
+        for a in m.attendees
         if domain not in a.get("email", "")
         and not a.get("self")
         and a.get("responseStatus") != "declined"
@@ -279,23 +284,22 @@ def minutes_label(meetings: list[Meeting]) -> str:
 
 def waybar_json(state: CalState, cfg: dict) -> str:
     """Produce the JSON line waybar reads from exec."""
-    if state.status == "not_configured":
-        css_class = "grey"
-    elif state.status == "error":
+    if state.status == "not_configured" or state.status == "error":
         css_class = "grey"
     else:
         css_class = classify_next_meeting(state.meetings, cfg["internal_domain"])
     label = minutes_label(state.meetings) if state.status == "ok" else ""
-    text  = f"󰃭 {label}" if label else "󰃭"
+    text = f"󰃭 {label}" if label else "󰃭"
     return json.dumps({"text": text, "class": css_class, "tooltip": ""}, ensure_ascii=False)
 
 
 # ── Google Calendar worker ────────────────────────────────────────────────────
 
+
 class CalWorker:
     """Background thread for Google Calendar API calls."""
 
-    def __init__(self, on_update: callable) -> None:  # type: ignore[type-arg]
+    def __init__(self, on_update: Callable[[CalState], None]) -> None:
         self._on_update = on_update
         self._state = CalState()
         self._lock = threading.Lock()
@@ -313,11 +317,12 @@ class CalWorker:
         """Fetch events in a background thread and post result to GTK."""
         threading.Thread(target=self._do_fetch, daemon=True).start()
 
-    def authenticate(self, on_done: callable) -> None:  # type: ignore[type-arg]
+    def authenticate(self, on_done: Callable[[bool, str], None]) -> None:
         """Run OAuth flow in a background thread.
 
         on_done(success: bool, message: str) is called on the GTK thread when done.
         """
+
         def _do():
             try:
                 _service, account = self._build_service()
@@ -325,9 +330,12 @@ class CalWorker:
                 # Immediately fetch events now that we're authed
                 self._do_fetch()
             except FileNotFoundError:
-                GLib.idle_add(on_done, False, "client_secret.json not found — see README § Authentication")
+                GLib.idle_add(
+                    on_done, False, "client_secret.json not found — see README § Authentication"
+                )
             except Exception as e:
                 GLib.idle_add(on_done, False, str(e))
+
         threading.Thread(target=_do, daemon=True).start()
 
     def fetch_if_stale(self) -> None:
@@ -371,12 +379,12 @@ class CalWorker:
         self._post(new_state)
 
     def _build_service(self):  # type: ignore[return]
-        from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
         from google_auth_oauthlib.flow import InstalledAppFlow
         from googleapiclient.discovery import build
 
-        creds: Optional[Credentials] = None
+        creds: Credentials | None = None
 
         if TOKEN_FILE.exists():
             creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
@@ -397,8 +405,9 @@ class CalWorker:
                 # from finding a browser.
                 os.environ.setdefault("WAYLAND_DISPLAY", "wayland-1")
                 os.environ.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-                os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS",
-                                      f"unix:path=/run/user/{os.getuid()}/bus")
+                os.environ.setdefault(
+                    "DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/bus"
+                )
                 flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
                 creds = flow.run_local_server(port=0, open_browser=True)
 
@@ -439,25 +448,28 @@ class CalWorker:
                 continue
 
             start_raw = ev.get("start", {})
-            end_raw   = ev.get("end", {})
+            end_raw = ev.get("end", {})
 
             start = _parse_dt(start_raw)
-            end   = _parse_dt(end_raw)
+            end = _parse_dt(end_raw)
             if start is None:
                 continue
+            end = end if end is not None else start
 
             visio_url, visio_icon = extract_visio(ev)
 
-            meetings.append(Meeting(
-                event_id   = ev.get("id", ""),
-                summary    = ev.get("summary", "(No title)"),
-                start      = start,
-                end        = end or start,
-                html_link  = ev.get("htmlLink", ""),
-                attendees  = ev.get("attendees", []),
-                visio_url  = visio_url,
-                visio_icon = visio_icon,
-            ))
+            meetings.append(
+                Meeting(
+                    event_id=ev.get("id", ""),
+                    summary=ev.get("summary", "(No title)"),
+                    start=start,
+                    end=end,
+                    html_link=ev.get("htmlLink", ""),
+                    attendees=ev.get("attendees", []),
+                    visio_url=visio_url,
+                    visio_icon=visio_icon,
+                )
+            )
 
         return meetings
 
@@ -469,13 +481,13 @@ class CalWorker:
         try:
             state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")
             payload = {
-                "status":  state.status,
+                "status": state.status,
                 "account": state.account,
                 "meetings": [
                     {
-                        "id":        m.event_id,
-                        "summary":   m.summary,
-                        "start":     m.start.isoformat(),
+                        "id": m.event_id,
+                        "summary": m.summary,
+                        "start": m.start.isoformat(),
                         "html_link": m.html_link,
                         "attendees": m.attendees,
                     }
@@ -490,7 +502,7 @@ class CalWorker:
         GLib.idle_add(self._on_update, state)
 
 
-def _parse_dt(raw: dict) -> Optional[datetime]:
+def _parse_dt(raw: dict) -> datetime | None:
     """Parse a Calendar API start/end dict to datetime."""
     if "dateTime" in raw:
         dt = datetime.fromisoformat(raw["dateTime"])
@@ -618,11 +630,8 @@ class WayNextWindow(Gtk.Window):
         Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.TOP, True)
         Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.RIGHT, True)
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.TOP, MARGIN_TOP)
-        Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.RIGHT,
-                                   self._calc_margin_right())
-        Gtk4LayerShell.set_keyboard_mode(
-            self, Gtk4LayerShell.KeyboardMode.ON_DEMAND
-        )
+        Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.RIGHT, self._calc_margin_right())
+        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
         self.set_default_size(POPUP_WIDTH, -1)
 
     def _calc_margin_right(self) -> int:
@@ -666,9 +675,7 @@ class WayNextWindow(Gtk.Window):
 
         # Settings panel (Revealer)
         self._settings_revealer = Gtk.Revealer()
-        self._settings_revealer.set_transition_type(
-            Gtk.RevealerTransitionType.SLIDE_DOWN
-        )
+        self._settings_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
         self._settings_revealer.set_transition_duration(150)
         outer.append(self._settings_revealer)
 
@@ -683,7 +690,7 @@ class WayNextWindow(Gtk.Window):
         key_ctrl.connect("key-pressed", self._on_key)
         self.add_controller(key_ctrl)
 
-        self._hide_timer: Optional[int] = None
+        self._hide_timer: int | None = None
 
     def _build_status_row(self) -> Gtk.Box:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -825,7 +832,9 @@ class WayNextWindow(Gtk.Window):
             self._auth_status_lbl.remove_css_class("wn-auth-status-ok")
             self._auth_status_lbl.add_css_class("wn-auth-status-error")
         else:
-            self._auth_status_lbl.set_text("Not signed in — place client_secret.json in ~/.config/waynext/")
+            self._auth_status_lbl.set_text(
+                "Not signed in — place client_secret.json in ~/.config/waynext/"
+            )
         auth_box.append(self._auth_status_lbl)
 
         outer.append(auth_box)
@@ -844,10 +853,14 @@ class WayNextWindow(Gtk.Window):
 
         # Lookahead hours
         spin = Gtk.SpinButton()
-        spin.set_adjustment(Gtk.Adjustment(
-            value=self._cfg["lookahead_hours"],
-            lower=1, upper=24, step_increment=1,
-        ))
+        spin.set_adjustment(
+            Gtk.Adjustment(
+                value=self._cfg["lookahead_hours"],
+                lower=1,
+                upper=24,
+                step_increment=1,
+            )
+        )
         spin.connect(
             "value-changed",
             lambda w: self._settings_draft.update({"lookahead_hours": int(w.get_value())}),
@@ -866,7 +879,7 @@ class WayNextWindow(Gtk.Window):
         # Colour pickers
         colours = self._cfg["colours"]
         colour_fields = [
-            ("no_meetings",   "Colour — no meetings"),
+            ("no_meetings", "Colour — no meetings"),
             ("internal_only", "Colour — internal only"),
             ("has_externals", "Colour — has externals"),
         ]
@@ -945,17 +958,17 @@ class WayNextWindow(Gtk.Window):
 
     @staticmethod
     def _rgba_to_hex(rgba: Gdk.RGBA) -> str:
-        r = int(rgba.red   * 255)
+        r = int(rgba.red * 255)
         g = int(rgba.green * 255)
-        b = int(rgba.blue  * 255)
+        b = int(rgba.blue * 255)
         return f"#{r:02x}{g:02x}{b:02x}"
 
     # ── Calendar update callback (GTK thread) ─────────────────────────────────
 
-    def _on_cal_update(self, state: CalState) -> None:
+    def _on_cal_update(self, state: CalState) -> bool:
         self._refresh_status(state)
         self._refresh_meetings(state)
-        return False  # GLib.idle_add must return False
+        return False  # GLib.idle_add must return False to fire only once
 
     def _refresh_status(self, state: CalState) -> None:
         if state.status == "ok":
@@ -1028,12 +1041,15 @@ class WayNextWindow(Gtk.Window):
     def _copy_to_clipboard(self, text: str) -> None:
         """Copy text to Wayland clipboard via wl-copy, fall back to xclip."""
         log.info("copy to clipboard: %s", text)
+
         def _do() -> None:
             try:
                 subprocess.run(
                     ["wl-copy", text],
-                    check=True, timeout=3,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    check=True,
+                    timeout=3,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
                 log.info("copied via wl-copy")
             except (FileNotFoundError, subprocess.CalledProcessError):
@@ -1041,12 +1057,14 @@ class WayNextWindow(Gtk.Window):
                     proc = subprocess.Popen(
                         ["xclip", "-selection", "clipboard"],
                         stdin=subprocess.PIPE,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
                     )
                     proc.communicate(input=text.encode(), timeout=3)
                     log.info("copied via xclip")
                 except Exception as e:
                     log.error("clipboard copy failed: %s", e)
+
         threading.Thread(target=_do, daemon=True).start()
 
     def _open_url(self, url: str) -> None:
@@ -1057,19 +1075,19 @@ class WayNextWindow(Gtk.Window):
         # to crash with "gdk_display_manager_get() before gtk_init()".
         uid = os.getuid()
         clean_env = {
-            "HOME":                    str(Path.home()),
-            "USER":                    os.environ.get("USER", ""),
-            "PATH":                    os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-            "WAYLAND_DISPLAY":         os.environ.get("WAYLAND_DISPLAY", "wayland-1"),
-            "DISPLAY":                 os.environ.get("DISPLAY", ""),
-            "XDG_RUNTIME_DIR":         os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}"),
-            "XDG_SESSION_TYPE":        os.environ.get("XDG_SESSION_TYPE", "wayland"),
-            "XDG_CURRENT_DESKTOP":     os.environ.get("XDG_CURRENT_DESKTOP", "Hyprland"),
-            "XDG_SESSION_DESKTOP":     os.environ.get("XDG_SESSION_DESKTOP", "Hyprland"),
+            "HOME": str(Path.home()),
+            "USER": os.environ.get("USER", ""),
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY", "wayland-1"),
+            "DISPLAY": os.environ.get("DISPLAY", ""),
+            "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}"),
+            "XDG_SESSION_TYPE": os.environ.get("XDG_SESSION_TYPE", "wayland"),
+            "XDG_CURRENT_DESKTOP": os.environ.get("XDG_CURRENT_DESKTOP", "Hyprland"),
+            "XDG_SESSION_DESKTOP": os.environ.get("XDG_SESSION_DESKTOP", "Hyprland"),
             "DBUS_SESSION_BUS_ADDRESS": os.environ.get(
                 "DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus"
             ),
-            "MOZ_ENABLE_WAYLAND":      "1",
+            "MOZ_ENABLE_WAYLAND": "1",
         }
         # Remove empty values
         clean_env = {k: v for k, v in clean_env.items() if v}
@@ -1091,7 +1109,9 @@ class WayNextWindow(Gtk.Window):
                 try:
                     desktop_file = subprocess.run(
                         ["xdg-settings", "get", "default-web-browser"],
-                        capture_output=True, text=True, timeout=2,
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
                     ).stdout.strip()
                     # Desktop file is e.g. "firefox.desktop" or
                     # "google-chrome.desktop" — strip the extension for the
@@ -1099,8 +1119,7 @@ class WayNextWindow(Gtk.Window):
                     window_class = desktop_file.removesuffix(".desktop")
                     if window_class:
                         subprocess.run(
-                            ["hyprctl", "dispatch", "focuswindow",
-                             f"class:{window_class}"],
+                            ["hyprctl", "dispatch", "focuswindow", f"class:{window_class}"],
                             capture_output=True,
                         )
                         log.info("focused window class:%s", window_class)
@@ -1118,6 +1137,7 @@ class WayNextWindow(Gtk.Window):
 
 
 # ── IPC server ────────────────────────────────────────────────────────────────
+
 
 class IPCServer:
     """Unix socket server for waybar / CLI control."""
@@ -1182,6 +1202,7 @@ def send_ipc(cmd: str) -> bool:
 
 # ── Status subcommand (non-GTK, for waybar exec) ──────────────────────────────
 
+
 def cmd_status() -> None:
     """Print waybar JSON and exit. Reads cached state from a temp file."""
     state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")
@@ -1190,21 +1211,23 @@ def cmd_status() -> None:
     if state_file.exists():
         try:
             data = json.loads(state_file.read_text())
-            status   = data.get("status", "not_configured")
+            status = data.get("status", "not_configured")
             meetings_raw = data.get("meetings", [])
 
             # Reconstruct minimal Meeting objects for classify_next_meeting
             meetings: list[Meeting] = []
             for m in meetings_raw:
                 start = datetime.fromisoformat(m["start"])
-                meetings.append(Meeting(
-                    event_id   = m.get("id", ""),
-                    summary    = m.get("summary", ""),
-                    start      = start,
-                    end        = start,
-                    html_link  = m.get("html_link", ""),
-                    attendees  = m.get("attendees", []),
-                ))
+                meetings.append(
+                    Meeting(
+                        event_id=m.get("id", ""),
+                        summary=m.get("summary", ""),
+                        start=start,
+                        end=start,
+                        html_link=m.get("html_link", ""),
+                        attendees=m.get("attendees", []),
+                    )
+                )
 
             if status != "ok":
                 css_class = "grey"
@@ -1224,6 +1247,7 @@ def cmd_status() -> None:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     cmd = sys.argv[1] if len(sys.argv) > 1 else "toggle"
 
@@ -1236,8 +1260,6 @@ def main() -> None:
         return
 
     # Start new daemon
-    style_mgr_applied = False
-
     app = Adw.Application(application_id=APP_ID)
 
     def on_activate(_app: Adw.Application) -> None:

@@ -93,13 +93,17 @@ Add to your waybar config (main monitor only):
 
 ```json
 "custom/waynext": {
-    "exec": "waynext status",
+    "exec": "waynext-status",
     "return-type": "json",
-    "interval": 120,
+    "interval": 30,
     "on-click": "waynext toggle",
     "tooltip": false
 }
 ```
+
+> **Note:** `waynext-status` is a lightweight standalone script (no GTK, ~20ms)
+> used by waybar's `exec`. `waynext toggle` (the daemon) is separate and must be
+> running for the popup to work — see § Autostart below.
 
 Add to your waybar CSS:
 
@@ -108,6 +112,63 @@ Add to your waybar CSS:
 #custom-waynext.orange { color: #f0a500; }
 #custom-waynext.red    { color: #cc3333; }
 #custom-waynext.grey   { color: #888888; }
+```
+
+## Autostart
+
+The waynext daemon must be running for the popup to work. The waybar
+`waynext-status` script reads a local state file and does not need the daemon,
+but `waynext toggle` (the click action) does.
+
+### Hyprland (recommended)
+
+Add to `~/.config/hypr/hyprland.conf`:
+
+```ini
+exec-once = ~/.local/bin/waynext toggle
+```
+
+This is the idiomatic Hyprland way. `exec-once` runs the command once at
+compositor startup and does not restart it if it crashes (use a systemd service
+for that if needed).
+
+`toggle` is used instead of `show` so the popup opens immediately on first
+launch — remove `toggle` or replace with a bare daemon invocation if you prefer
+it to start hidden.
+
+### Why not XDG autostart?
+
+Hyprland does not process XDG `.desktop` autostart files natively. There is
+no built-in equivalent of GNOME's or KDE's autostart runner. `exec-once` in
+`hyprland.conf` is the standard solution.
+
+### systemd user service (alternative)
+
+For automatic restart on crash, create
+`~/.config/systemd/user/waynext.service`:
+
+```ini
+[Unit]
+Description=WayNext — calendar tray daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/waynext toggle
+Restart=on-failure
+RestartSec=3
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+
+[Install]
+WantedBy=graphical-session.target
+```
+
+Then enable it:
+
+```bash
+systemctl --user enable --now waynext.service
 ```
 
 ## Configuration

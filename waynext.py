@@ -1107,7 +1107,7 @@ class WayNextWindow(Gtk.Window):
             try:
                 import tempfile
 
-                import markdown
+                import markdown  # type: ignore[import-untyped]
 
                 md_text = readme.read_text(encoding="utf-8")
                 body = markdown.markdown(
@@ -1142,7 +1142,7 @@ class WayNextWindow(Gtk.Window):
                     tmp.write(html)
                 tmp_path = tmp.name
                 log.info("help HTML written to %s", tmp_path)
-                GLib.idle_add(lambda p=tmp_path: self._open_url(f"file://{p}") or False)
+                GLib.idle_add(lambda p=tmp_path: (self._open_url(f"file://{p}"), False)[1])
             except Exception as e:
                 log.error("help render failed: %s", e)
 

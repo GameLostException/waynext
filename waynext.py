@@ -658,9 +658,15 @@ class ClickCatcher(Gtk.Window):
             Gtk.STYLE_PROVIDER_PRIORITY_USER + 1,
         )
 
-        # Any click → close popup
+        # Any click → close popup, but ignore clicks within 300ms of showing
+        # (the opening click is still propagating and would immediately re-close).
+        self._shown_at: float = 0.0
+
         gesture = Gtk.GestureClick()
-        gesture.connect("released", lambda *_: on_click())
+        gesture.connect(
+            "released",
+            lambda *_: on_click() if time.monotonic() - self._shown_at > 0.3 else None,
+        )
         self.add_controller(gesture)
 
         self.set_visible(False)
@@ -1351,6 +1357,7 @@ class IPCServer:
     def _show(self) -> None:
         win = self._window
         if win._catcher:
+            win._catcher._shown_at = time.monotonic()
             win._catcher.set_visible(True)
         win.set_visible(True)
         win.present()

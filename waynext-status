@@ -10,6 +10,7 @@ NO GTK imports — runs in <50ms, safe to call every 30s from waybar.
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -70,8 +71,19 @@ def minutes_label(meetings: list[dict]) -> str:
         return ""
 
 
+STATE_MAX_AGE_SEC = 600   # treat state file as stale after 10 minutes
+
+
 def main() -> None:
     if not STATE_FILE.exists():
+        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""},
+                          ensure_ascii=False))
+        return
+
+    # Treat stale state files as missing — prevents showing yesterday's data
+    # on startup before the daemon has completed its first fresh fetch.
+    age = time.time() - STATE_FILE.stat().st_mtime
+    if age > STATE_MAX_AGE_SEC:
         print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""},
                           ensure_ascii=False))
         return

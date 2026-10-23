@@ -1354,7 +1354,16 @@ def main() -> None:
         IPCServer(window)
 
         # Always fetch on startup so the state file is written immediately —
-        # waybar reads it via `waynext status` and needs it to colour the icon.
+        # waybar reads it via `waynext-status` and needs it to colour the icon.
+        # Touch the state file with status=fetching immediately so the
+        # staleness check in waynext-status doesn't fire during the first fetch.
+        _state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")
+        try:
+            import json as _json
+
+            _state_file.write_text(_json.dumps({"status": "fetching", "meetings": []}))
+        except Exception:
+            pass
         window._cal.fetch()
 
         if cmd in ("show", "toggle"):

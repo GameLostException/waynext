@@ -1142,7 +1142,12 @@ class WayNextWindow(Gtk.Window):
                     tmp.write(html)
                 tmp_path = tmp.name
                 log.info("help HTML written to %s", tmp_path)
-                GLib.idle_add(lambda p=tmp_path: (self._open_url(f"file://{p}"), False)[1])
+
+                def _open_help_url(p: str = tmp_path) -> bool:
+                    self._open_url(f"file://{p}")
+                    return False
+
+                GLib.idle_add(_open_help_url)
             except Exception as e:
                 log.error("help render failed: %s", e)
 

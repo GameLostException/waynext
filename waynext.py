@@ -624,6 +624,45 @@ CSS = """
 """
 
 
+class ClickCatcher(Gtk.Window):
+    """Fullscreen transparent layer-shell window that captures clicks outside the popup.
+
+    Sits on the TOP layer (below the popup's OVERLAY layer), anchored to all
+    four edges so it covers the entire screen. Any click on it means the user
+    clicked outside the popup — so we close both.
+    """
+
+    def __init__(self, on_click: Callable[[], None]) -> None:
+        super().__init__()
+        Gtk4LayerShell.init_for_window(self)
+        Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.TOP)
+        for edge in (
+            Gtk4LayerShell.Edge.TOP,
+            Gtk4LayerShell.Edge.BOTTOM,
+            Gtk4LayerShell.Edge.LEFT,
+            Gtk4LayerShell.Edge.RIGHT,
+        ):
+            Gtk4LayerShell.set_anchor(self, edge, True)
+        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.NONE)
+
+        # Fully transparent, no decoration
+        self.set_decorated(False)
+        provider = Gtk.CssProvider()
+        provider.load_from_string("window { background: transparent; }")
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_USER + 1,
+        )
+
+        # Any click → close popup
+        gesture = Gtk.GestureClick()
+        gesture.connect("released", lambda *_: on_click())
+        self.add_controller(gesture)
+
+        self.set_visible(False)
+
+
 class WayNextWindow(Gtk.Window):
     """GTK4 popup window for waynext."""
 
@@ -637,6 +676,10 @@ class WayNextWindow(Gtk.Window):
         self._setup_css()
         self._build_ui()
 
+        # Transparent fullscreen click-catcher — shown behind popup to
+        # capture clicks outside and close the popup.
+        self._catcher: ClickCatcher | None = None
+
         self._cal = CalWorker(on_update=self._on_cal_update)
         self._cal.fetch()
 
@@ -649,7 +692,7 @@ class WayNextWindow(Gtk.Window):
         Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.RIGHT, True)
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.TOP, MARGIN_TOP)
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.RIGHT, self._calc_margin_right())
-        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.EXCLUSIVE)
+        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
         self.set_default_size(POPUP_WIDTH, -1)
 
     def _calc_margin_right(self) -> int:
@@ -697,8 +740,7 @@ class WayNextWindow(Gtk.Window):
         self._settings_revealer.set_transition_duration(150)
         outer.append(self._settings_revealer)
 
-        # Close on focus loss (click outside) — works via EXCLUSIVE keyboard mode.
-        self.connect("notify::is-active", self._on_focus_change)
+        # Close on focus loss (click outside) handled by ClickCatcher window.
 
         # Escape to close
         key_ctrl = Gtk.EventControllerKey()
@@ -1084,13 +1126,10 @@ class WayNextWindow(Gtk.Window):
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────
 
-    def _on_focus_change(self, _win: WayNextWindow, _param: object) -> None:
-        """Close popup when it loses focus (user clicked elsewhere or pressed Escape)."""
-        if not self.is_active():
-            self._do_hide()
-
     def _do_hide(self) -> bool:
         self.set_visible(False)
+        if self._catcher:
+            self._catcher.set_visible(False)
         if self._settings_open:
             self._close_settings(save=False)
         return False
@@ -1308,6 +1347,8 @@ class IPCServer:
 
     def _show(self) -> None:
         win = self._window
+        if win._catcher:
+            win._catcher.set_visible(True)
         win.set_visible(True)
         win.present()
         win.poll()
@@ -1394,6 +1435,12 @@ def main() -> None:
         window = WayNextWindow()
         window.set_application(app)
         app.add_window(window)
+
+        # Click-catcher — fullscreen transparent window behind the popup
+        catcher = ClickCatcher(on_click=window._do_hide)
+        catcher.set_application(app)
+        app.add_window(catcher)
+        window._catcher = catcher
 
         IPCServer(window)
 

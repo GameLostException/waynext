@@ -643,12 +643,15 @@ class ClickCatcher(Gtk.Window):
             Gtk4LayerShell.Edge.RIGHT,
         ):
             Gtk4LayerShell.set_anchor(self, edge, True)
+        # Leave room for the waybar at the top so we don't intercept its clicks
+        Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.TOP, 28)
         Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.NONE)
 
-        # Fully transparent, no decoration
         self.set_decorated(False)
+        # Near-transparent background — fully transparent (alpha=0) causes
+        # Hyprland to skip pointer event routing for the surface.
         provider = Gtk.CssProvider()
-        provider.load_from_string("window { background: transparent; }")
+        provider.load_from_string("window { background: rgba(0,0,0,0.01); }")
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(),
             provider,

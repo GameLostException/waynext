@@ -131,6 +131,7 @@ VISIO_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 
 DEFAULT_CONFIG: dict = {
     "lookahead_hours": 4,
+    "refresh_interval_min": 2,
     "internal_domain": "@example.com",
     "colours": {
         "no_meetings": "#3daee9",
@@ -357,7 +358,8 @@ class CalWorker:
     def fetch_if_stale(self) -> None:
         with self._lock:
             age = time.time() - self._state.fetched_at
-        if age > CACHE_TTL_SEC:
+            ttl = int(self._cfg.get("refresh_interval_min", 2)) * 60
+        if age > ttl:
             self.fetch()
 
     # ── Internal ──────────────────────────────────────────────────────────────
@@ -707,6 +709,7 @@ class WayNextWindow(Gtk.Window):
         self.add_controller(key_ctrl)
 
         self._hide_timer: int | None = None
+        self._poll_timer_id: int | None = None
 
     def _build_status_row(self) -> Gtk.Box:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -889,6 +892,35 @@ class WayNextWindow(Gtk.Window):
         )
         panel.append(_row("Lookahead (hours)", spin))
 
+        # Refresh interval
+        max_refresh = self._cfg["lookahead_hours"] * 60
+        refresh_spin = Gtk.SpinButton()
+        refresh_spin.set_adjustment(
+            Gtk.Adjustment(
+                value=self._cfg.get("refresh_interval_min", 2),
+                lower=1,
+                upper=max_refresh,
+                step_increment=1,
+            )
+        )
+        # Keep max in sync when lookahead changes
+        spin.connect(
+            "value-changed",
+            lambda w, rs=refresh_spin: rs.set_adjustment(
+                Gtk.Adjustment(
+                    value=min(rs.get_value(), w.get_value() * 60),
+                    lower=1,
+                    upper=int(w.get_value()) * 60,
+                    step_increment=1,
+                )
+            ),
+        )
+        refresh_spin.connect(
+            "value-changed",
+            lambda w: self._settings_draft.update({"refresh_interval_min": int(w.get_value())}),
+        )
+        panel.append(_row("Refresh interval (min)", refresh_spin))
+
         # Internal domain
         domain_entry = Gtk.Entry()
         domain_entry.set_text(self._cfg["internal_domain"])
@@ -976,6 +1008,7 @@ class WayNextWindow(Gtk.Window):
             save_config(self._cfg)
             self._cal.reload_config()
             self._cal.fetch()
+            self._start_poll_timer()  # reschedule with new interval
 
     @staticmethod
     def _rgba_to_hex(rgba: Gdk.RGBA) -> str:
@@ -1039,6 +1072,19 @@ class WayNextWindow(Gtk.Window):
 
         for m in visible:
             self._list_box.append(self._build_meeting_row(m, self._cfg["internal_domain"]))
+
+    def _start_poll_timer(self) -> None:
+        """Start (or restart) the background calendar poll timer from config."""
+        if self._poll_timer_id is not None:
+            GLib.source_remove(self._poll_timer_id)
+        interval_s = int(self._cfg.get("refresh_interval_min", 2)) * 60
+
+        def _tick() -> bool:
+            self._cal.fetch_if_stale()
+            return True
+
+        self._poll_timer_id = GLib.timeout_add_seconds(interval_s, _tick)
+        log.info("poll timer set to every %ds", interval_s)
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────
 
@@ -1372,14 +1418,9 @@ def main() -> None:
             pass
         window._cal.fetch()
 
-        # Background polling — re-fetch calendar every POLL_INTERVAL_S seconds.
-        # This keeps waynext-status (called by waybar) always showing fresh data
-        # without requiring the user to open the popup.
-        def _poll_tick() -> bool:
-            window._cal.fetch_if_stale()
-            return True  # True = repeat the timer
-
-        GLib.timeout_add_seconds(POLL_INTERVAL_S, _poll_tick)
+        # Background polling — re-fetch calendar periodically.
+        # Interval comes from config (refresh_interval_min), rescheduled on save.
+        window._start_poll_timer()
 
         if cmd in ("show", "toggle"):
             window.set_visible(True)

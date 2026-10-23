@@ -537,6 +537,9 @@ def _parse_dt(raw: dict) -> datetime | None:
 # ── GTK4 popup window ─────────────────────────────────────────────────────────
 
 CSS = """
+/* Make the window surface transparent so the rounded inner box shows through */
+window.background { background: transparent; }
+
 .wn-main {
     background-color: @window_bg_color;
     border-radius: 8px;
@@ -703,6 +706,7 @@ class WayNextWindow(Gtk.Window):
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.RIGHT, self._calc_margin_right())
         Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
         self.set_default_size(POPUP_WIDTH, -1)
+        self.set_decorated(False)
 
     def _calc_margin_right(self) -> int:
         """Return right margin so the popup sits flush against the right edge of the bar.

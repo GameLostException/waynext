@@ -745,6 +745,7 @@ class WayNextWindow(Gtk.Window):
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         outer.add_css_class("wn-main")
+        outer.set_overflow(Gtk.Overflow.HIDDEN)  # clip children to border-radius
         self.set_child(outer)
 
         # Status row
@@ -1148,13 +1149,12 @@ class WayNextWindow(Gtk.Window):
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────
 
-    def _do_hide(self) -> bool:
+    def _do_hide(self) -> None:
         self.set_visible(False)
         if self._catcher:
             self._catcher.set_visible(False)
         if self._settings_open:
             self._close_settings(save=False)
-        return False
 
     def _on_key(self, _ctrl, keyval: int, *_args) -> bool:
         if keyval == Gdk.KEY_Escape:

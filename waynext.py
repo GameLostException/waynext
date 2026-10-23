@@ -1358,9 +1358,10 @@ class IPCServer:
 
     def _show(self) -> None:
         win = self._window
+        age = time.monotonic() - win._hidden_at
         # Suppress re-open within 300ms of closing — prevents the ClickCatcher's
         # hide and the icon's ncat toggle from racing to re-show the popup.
-        if time.monotonic() - win._hidden_at < 0.3:
+        if age < 0.3:
             return
         if win._catcher:
             win._catcher._shown_at = time.monotonic()

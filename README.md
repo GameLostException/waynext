@@ -1,95 +1,114 @@
 # waynext
 
-A Waybar tray widget that shows upcoming Google Calendar meetings and
-colour-codes the icon based on attendee composition of the next meeting.
+A Waybar tray widget that connects to Google Calendar and shows your upcoming
+meetings, colour-coded by attendee composition.
 
 ## Features
 
-- Blue icon: no meetings in the next N hours (or not yet configured)
-- Orange icon: next meeting has attendees within your domain only
-- Red icon: next meeting has at least one external attendee
-- Click icon → popup with meeting list
-- Each meeting row shows time, topic, and a visio link icon (Google Meet, Zoom, Teams…)
-- Click meeting row → opens Google Calendar event in browser
-- Click visio icon → opens the video call link directly
-- Inline settings panel: configure lookahead window, domain, and colours
+- **Coloured icon** in the Waybar tray:
+  - Grey — not configured or no data yet
+  - Blue — no meetings within the lookahead window
+  - Orange — next meeting has attendees within your organisation only
+  - Red — next meeting has at least one external attendee
+- **Countdown** — minutes until the next meeting shown next to the icon
+- **Popup meeting list** — click the icon to see upcoming meetings
+  - Time, title, and conference link per row
+  - Click a row → opens the Google Calendar event in your browser
+  - Click the link icon → opens the video call (Google Meet, Zoom, Teams, …)
+  - Click the copy icon → copies the conference URL to the clipboard
+- **Inline settings panel** — configure lookahead window, domain, refresh
+  interval, and colours without leaving the popup
+- **Help button** — renders this README in your browser
 
-## Authentication
+## Requirements
 
-waynext uses Google OAuth2 with an "installed app" client secret. The flow is:
+- Wayland compositor (tested on Hyprland)
+- [Waybar](https://github.com/Alexays/Waybar)
+- [gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell)
+- Python 3.11+
+- A Google account with Calendar access
 
-1. You place a `client_secret.json` in `~/.config/waynext/`
-2. Click **Sign in with Google** in the settings panel (⚙ icon)
-3. A browser window opens for Google's consent screen — approve it
-4. waynext saves a refresh token to `~/.config/waynext/token.json`
-5. Done — token is reused automatically and silently refreshed forever
+## Installation
 
-**`client_secret.json` is never committed to git** — only `client_secret.template.json`
-is tracked, as a structural reference.
+### 1. Install dependencies
 
-### Option A — Reuse an existing Google OAuth client (recommended)
-
-If you have another app on this machine with a registered OAuth client
-(e.g. Syncopath), copy its `client_secret.json`:
-
-```bash
-cp ~/.config/syncopath/client_secret.json ~/.config/waynext/client_secret.json
-```
-
-Then click **Sign in with Google**. You may be asked to grant Calendar access
-in addition to any existing permissions.
-
-### Option B — Create your own Google Cloud client
-
-1. Go to https://console.cloud.google.com/
-2. Create a project → **APIs & Services → Enable APIs** → enable **Google Calendar API**
-3. **APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID**
-   - Application type: **Desktop app**
-   - Name: anything (e.g. "waynext")
-4. Download the JSON → save as `~/.config/waynext/client_secret.json`
-5. Click **Sign in with Google** in the settings panel
-
-### Security notes
-
-- `client_secret.json` and `token.json` are in `.gitignore` — they are never committed
-- OAuth scope is **read-only** (`calendar.readonly`) — waynext cannot modify your calendar
-- The refresh token grants read access to your calendar and can be revoked at any time:
-  https://myaccount.google.com/permissions
-- The client_secret identifies the *application*, not your account — see SPEC.md § Security
-
-
-
-**Arch:**
+**Arch Linux:**
 ```bash
 sudo pacman -S gtk4 libadwaita gtk4-layer-shell python-gobject python-yaml
 pip install --user google-api-python-client google-auth-oauthlib google-auth-httplib2
 ```
 
-**Debian/Ubuntu:**
+**Debian / Ubuntu:**
 ```bash
 sudo apt install libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev \
     python3-gi python3-yaml
 pip install --user google-api-python-client google-auth-oauthlib google-auth-httplib2
 ```
 
-### 2. Install
+### 2. Install waynext
 
 ```bash
-git clone https://github.com/GameLostException/waynext.git ~/Lab/waynext
-cd ~/Lab/waynext
+git clone https://github.com/GameLostException/waynext.git
+cd waynext
 make install
 ```
 
-### 3. Set up authentication
+This installs `waynext` and `waynext-status` to `~/.local/bin/`.
 
-See **§ Authentication** above — either copy an existing `client_secret.json` or
-create one from Google Cloud Console. Then click **Sign in with Google** in the
-settings panel (⚙ icon in the popup).
+### 3. Set up Google Calendar access
 
+See **§ Authentication** below.
+
+## Authentication
+
+waynext uses Google OAuth2. You need an OAuth 2.0 client credentials file
+(`client_secret.json`) from Google Cloud Console. The file is placed locally
+on your machine and never shared.
+
+### Step 1 — Create OAuth credentials
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a project (or select an existing one)
+3. Enable the **Google Calendar API**: *APIs & Services → Enable APIs & Services*
+4. Create credentials: *APIs & Services → Credentials → Create Credentials →
+   OAuth 2.0 Client ID*
+   - Application type: **Desktop app**
+   - Name: anything (e.g. "waynext")
+5. Download the JSON file
+
+### Step 2 — Place the credentials file
+
+```bash
+mkdir -p ~/.config/waynext
+cp ~/Downloads/client_secret_*.json ~/.config/waynext/client_secret.json
+```
+
+### Step 3 — Sign in
+
+Open the waynext popup (click the icon in Waybar), open the settings panel
+(⚙), and click **Sign in with Google**. A browser window opens for Google's
+consent screen. After approving, a refresh token is saved to
+`~/.config/waynext/token.json` and reused automatically from then on.
+
+### Security
+
+- `client_secret.json` and `token.json` are listed in `.gitignore` — they stay
+  on your machine and are never committed to version control
+- OAuth scope is **read-only** (`calendar.readonly`) — waynext cannot create,
+  modify, or delete calendar events
+- Access can be revoked at any time at
+  https://myaccount.google.com/permissions
 
 ## Waybar configuration
 
-Add to your waybar config (main monitor only):
+waynext uses two executables:
+
+| Executable | Role |
+|---|---|
+| `waynext` | GTK4 daemon — handles the popup and calendar polling |
+| `waynext-status` | Lightweight status script — called by Waybar every 30 s |
+
+Add to your Waybar config:
 
 ```json
 "custom/waynext": {
@@ -101,26 +120,25 @@ Add to your waybar config (main monitor only):
 }
 ```
 
-> **Note:** `waynext-status` is a lightweight standalone script (no GTK, ~20ms)
-> used by waybar's `exec`. `waynext toggle` (the daemon) is separate and must be
-> running for the popup to work — see § Autostart below.
-
-Add to your waybar CSS:
+Add to your Waybar CSS:
 
 ```css
+#custom-waynext        { padding: 0 6px; }
 #custom-waynext.blue   { color: #3daee9; }
 #custom-waynext.orange { color: #f0a500; }
 #custom-waynext.red    { color: #cc3333; }
 #custom-waynext.grey   { color: #888888; }
 ```
 
+The colours match the defaults and can be changed in the settings panel.
+
 ## Autostart
 
-The waynext daemon must be running for the popup to work. The waybar
-`waynext-status` script reads a local state file and does not need the daemon,
-but `waynext toggle` (the click action) does.
+The `waynext` daemon must be running for the popup and polling to work.
+`waynext-status` reads a local state file and does not require the daemon,
+but the icon will turn grey if the daemon has not run recently.
 
-### Hyprland (recommended)
+### Hyprland
 
 Add to `~/.config/hypr/hyprland.conf`:
 
@@ -128,28 +146,21 @@ Add to `~/.config/hypr/hyprland.conf`:
 exec-once = ~/.local/bin/waynext toggle
 ```
 
-This is the idiomatic Hyprland way. `exec-once` runs the command once at
-compositor startup and does not restart it if it crashes (use a systemd service
-for that if needed).
+`exec-once` is the idiomatic Hyprland way to start a background process at
+compositor launch. Using `toggle` opens the popup on first start; replace with
+`show` or omit the argument to start silently.
 
-`toggle` is used instead of `show` so the popup opens immediately on first
-launch — remove `toggle` or replace with a bare daemon invocation if you prefer
-it to start hidden.
+> **Note:** Hyprland does not process XDG autostart `.desktop` files natively,
+> so `exec-once` is the correct approach.
 
-### Why not XDG autostart?
-
-Hyprland does not process XDG `.desktop` autostart files natively. There is
-no built-in equivalent of GNOME's or KDE's autostart runner. `exec-once` in
-`hyprland.conf` is the standard solution.
-
-### systemd user service (alternative)
+### systemd user service
 
 For automatic restart on crash, create
 `~/.config/systemd/user/waynext.service`:
 
 ```ini
 [Unit]
-Description=WayNext — calendar tray daemon
+Description=waynext — Google Calendar tray daemon
 After=graphical-session.target
 PartOf=graphical-session.target
 
@@ -165,7 +176,7 @@ Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
 WantedBy=graphical-session.target
 ```
 
-Then enable it:
+Enable it:
 
 ```bash
 systemctl --user enable --now waynext.service
@@ -173,11 +184,12 @@ systemctl --user enable --now waynext.service
 
 ## Configuration
 
-`~/.config/waynext/config.yaml` (created with defaults on first run):
+`~/.config/waynext/config.yaml` is created with defaults on first run:
 
 ```yaml
-lookahead_hours: 4
-internal_domain: "@example.com"
+lookahead_hours: 4          # how far ahead to look for meetings
+refresh_interval_min: 2     # how often to poll Google Calendar (minutes)
+internal_domain: "@example.com"  # attendees at this domain are "internal"
 
 colours:
   no_meetings: "#3daee9"
@@ -186,23 +198,17 @@ colours:
   not_configured: "#888888"
 ```
 
-All settings are also editable via the ⚙ gear icon in the popup.
+All settings are editable via the ⚙ icon in the popup — no need to edit the
+file directly.
 
-## Usage
+## Commands
 
 ```
 waynext toggle    Show/hide popup (default)
 waynext show      Show popup
 waynext hide      Hide popup
-waynext status    Print waybar JSON to stdout
-waynext reload    Re-read config and re-fetch calendar
+waynext reload    Re-read config and re-fetch calendar immediately
 waynext restart   Kill daemon and restart
 ```
 
-## Security
-
-- `client_secret.json` and `token.json` are in `.gitignore` and never committed
-- Only `client_secret.template.json` (empty placeholder) is tracked in git
-- OAuth scope is read-only: `calendar.readonly`
-- No credentials or domain-specific configuration in source code
-- Revoke access at any time: https://myaccount.google.com/permissions
+`waynext-status` is called by Waybar and is not intended for direct use.

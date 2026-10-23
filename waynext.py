@@ -97,7 +97,8 @@ CONFIG_FILE = CONFIG_DIR / "config.yaml"
 SOCKET_PATH = Path(f"/tmp/waynext-{os.getuid()}.sock")
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-CACHE_TTL_SEC = 60  # re-fetch at most once per minute
+CACHE_TTL_SEC = 300  # re-fetch Google Calendar at most once every 5 minutes
+POLL_INTERVAL_S = 120  # background re-fetch timer interval (2 minutes)
 POPUP_WIDTH = 320
 MARGIN_TOP = 0
 
@@ -1370,6 +1371,15 @@ def main() -> None:
         except Exception:
             pass
         window._cal.fetch()
+
+        # Background polling — re-fetch calendar every POLL_INTERVAL_S seconds.
+        # This keeps waynext-status (called by waybar) always showing fresh data
+        # without requiring the user to open the popup.
+        def _poll_tick() -> bool:
+            window._cal.fetch_if_stale()
+            return True  # True = repeat the timer
+
+        GLib.timeout_add_seconds(POLL_INTERVAL_S, _poll_tick)
 
         if cmd in ("show", "toggle"):
             window.set_visible(True)

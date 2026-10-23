@@ -537,8 +537,14 @@ def _parse_dt(raw: dict) -> datetime | None:
 # ── GTK4 popup window ─────────────────────────────────────────────────────────
 
 CSS = """
-/* Make the window surface transparent so the rounded inner box shows through */
-window.background { background: transparent; }
+/* Transparent window surface — Adwaita adds .background class which must be
+   explicitly overridden to allow the inner box border-radius to show through */
+window,
+window.background,
+.wn-transparent {
+    background-color: transparent;
+    background-image: none;
+}
 
 .wn-main {
     background-color: @window_bg_color;
@@ -733,6 +739,9 @@ class WayNextWindow(Gtk.Window):
     def _build_ui(self) -> None:
         self.set_decorated(False)
         self.set_resizable(False)
+
+        self.set_decorated(False)
+        self.add_css_class("wn-transparent")
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         outer.add_css_class("wn-main")

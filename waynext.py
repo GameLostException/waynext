@@ -649,7 +649,7 @@ class WayNextWindow(Gtk.Window):
         Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.RIGHT, True)
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.TOP, MARGIN_TOP)
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.RIGHT, self._calc_margin_right())
-        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
+        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.EXCLUSIVE)
         self.set_default_size(POPUP_WIDTH, -1)
 
     def _calc_margin_right(self) -> int:
@@ -697,14 +697,8 @@ class WayNextWindow(Gtk.Window):
         self._settings_revealer.set_transition_duration(150)
         outer.append(self._settings_revealer)
 
-        # Auto-hide on mouse leave — REMOVED.
-        # Popup closes only via: toggle (icon click), Escape, or click outside.
-
-        # Click outside to close
-        click_outside = Gtk.GestureClick()
-        click_outside.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        click_outside.connect("pressed", self._on_click_outside)
-        self.add_controller(click_outside)
+        # Close on focus loss (click outside) — works via EXCLUSIVE keyboard mode.
+        self.connect("notify::is-active", self._on_focus_change)
 
         # Escape to close
         key_ctrl = Gtk.EventControllerKey()
@@ -1090,10 +1084,9 @@ class WayNextWindow(Gtk.Window):
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────
 
-    def _on_click_outside(self, _gesture: Gtk.GestureClick, _n: int, x: float, y: float) -> None:
-        """Close popup when user clicks outside the window surface."""
-        alloc = self.get_allocation()
-        if x < 0 or y < 0 or x > alloc.width or y > alloc.height:
+    def _on_focus_change(self, _win: WayNextWindow, _param: object) -> None:
+        """Close popup when it loses focus (user clicked elsewhere or pressed Escape)."""
+        if not self.is_active():
             self._do_hide()
 
     def _do_hide(self) -> bool:

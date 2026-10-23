@@ -697,18 +697,20 @@ class WayNextWindow(Gtk.Window):
         self._settings_revealer.set_transition_duration(150)
         outer.append(self._settings_revealer)
 
-        # Auto-hide on mouse leave
-        motion = Gtk.EventControllerMotion()
-        motion.connect("enter", lambda *_: self._cancel_hide())
-        motion.connect("leave", lambda *_: self._schedule_hide())
-        self.add_controller(motion)
+        # Auto-hide on mouse leave — REMOVED.
+        # Popup closes only via: toggle (icon click), Escape, or click outside.
+
+        # Click outside to close
+        click_outside = Gtk.GestureClick()
+        click_outside.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        click_outside.connect("pressed", self._on_click_outside)
+        self.add_controller(click_outside)
 
         # Escape to close
         key_ctrl = Gtk.EventControllerKey()
         key_ctrl.connect("key-pressed", self._on_key)
         self.add_controller(key_ctrl)
 
-        self._hide_timer: int | None = None
         self._poll_timer_id: int | None = None
 
     def _build_status_row(self) -> Gtk.Box:
@@ -1088,14 +1090,11 @@ class WayNextWindow(Gtk.Window):
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────
 
-    def _schedule_hide(self) -> None:
-        self._cancel_hide()
-        self._hide_timer = GLib.timeout_add(600, self._do_hide)
-
-    def _cancel_hide(self) -> None:
-        if self._hide_timer is not None:
-            GLib.source_remove(self._hide_timer)
-            self._hide_timer = None
+    def _on_click_outside(self, _gesture: Gtk.GestureClick, _n: int, x: float, y: float) -> None:
+        """Close popup when user clicks outside the window surface."""
+        alloc = self.get_allocation()
+        if x < 0 or y < 0 or x > alloc.width or y > alloc.height:
+            self._do_hide()
 
     def _do_hide(self) -> bool:
         self.set_visible(False)

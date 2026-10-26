@@ -1312,23 +1312,26 @@ class WayNextWindow(Gtk.Window):
                 pass
             return None
 
-        def _wait_for_new_window(browser_class: str, timeout_s: float) -> str:
+        def _wait_for_browser_activation(browser_class: str, timeout_s: float) -> str:
             """
-            Subscribe to the Hyprland event socket and wait for an openwindow
-            event whose class matches browser_class.
+            Subscribe to the Hyprland event socket and wait for the browser
+            to become the active window after xdg-open is called.
 
-            Returns the window address string (e.g. "0x...") if a new window
-            opened within timeout_s seconds, or "" if it timed out (meaning
-            the URL opened as a tab in an existing window — no focus action
-            needed).
+            Watches two events:
+              openwindow   — browser opened a brand-new window (new surface mapped)
+              activewindow — browser raised an existing window (tab in existing window)
 
-            This is event-driven: the socket pushes openwindow the instant
-            Hyprland maps the new surface, so there is no polling or sleep.
-            The timeout is a hard safety net only.
+            Both cases return the window address so the caller can dispatch
+            focuswindow address:<addr>, which follows the window to whichever
+            monitor/workspace it is on — display-agnostic.
+
+            The timeout is a hard safety net only; in practice the socket
+            pushes the event within milliseconds of the browser responding.
+            Returns "" on timeout (nothing to focus).
             """
             sock_path = _hypr_socket2_path()
             if not sock_path:
-                log.warning("Hyprland socket2 not found — cannot watch for new window")
+                log.warning("Hyprland socket2 not found — cannot watch for browser activation")
                 return ""
 
             import select as _select
@@ -1352,19 +1355,37 @@ class WayNextWindow(Gtk.Window):
                         buf += chunk
                         while "\n" in buf:
                             line, buf = buf.split("\n", 1)
-                            # openwindow event format:
-                            #   openwindow>>address,workspacenum,class,title
-                            if not line.startswith("openwindow>>"):
-                                continue
-                            payload = line[len("openwindow>>"):]
-                            parts = payload.split(",", 3)
-                            if len(parts) < 3:
-                                continue
-                            addr_raw, _ws, win_class = parts[0], parts[1], parts[2]
-                            if browser_class.lower() in win_class.lower():
-                                addr = addr_raw if addr_raw.startswith("0x") else f"0x{addr_raw}"
-                                log.info("openwindow event: class=%s addr=%s", win_class, addr)
-                                return addr
+
+                            # openwindow>>addr,workspacenum,class,title
+                            if line.startswith("openwindow>>"):
+                                payload = line[len("openwindow>>"):]
+                                parts = payload.split(",", 3)
+                                if len(parts) >= 3:
+                                    addr_raw, _ws, win_class = parts[0], parts[1], parts[2]
+                                    if browser_class.lower() in win_class.lower():
+                                        addr = addr_raw if addr_raw.startswith("0x") else f"0x{addr_raw}"
+                                        log.info("openwindow: class=%s addr=%s", win_class, addr)
+                                        return addr
+
+                            # activewindow>>class,title  (no address in this event)
+                            # Fires when the browser raises an existing window for
+                            # a new tab. Resolve the address via hyprctl immediately.
+                            elif line.startswith("activewindow>>"):
+                                payload = line[len("activewindow>>"):]
+                                win_class = payload.split(",", 1)[0]
+                                if browser_class.lower() in win_class.lower():
+                                    try:
+                                        r = subprocess.run(
+                                            ["hyprctl", "activewindow", "-j"],
+                                            capture_output=True, text=True, timeout=1,
+                                        )
+                                        addr = json.loads(r.stdout).get("address", "")
+                                        if addr:
+                                            log.info("activewindow raised: class=%s addr=%s", win_class, addr)
+                                            return addr
+                                    except Exception:
+                                        pass
+
             except Exception as e:
                 log.warning("socket watch error: %s", e)
             return ""
@@ -1386,25 +1407,22 @@ class WayNextWindow(Gtk.Window):
                     log.info("no browser class detected — skipping focus")
                     return
 
-                # Wait for Hyprland to emit an openwindow event for the browser.
-                # The socket pushes the event the instant the surface is mapped —
-                # no polling, no sleep. Timeout of 4s is a pure safety net.
-                #
-                # If no openwindow fires within the timeout, the URL opened as
-                # a new tab in an existing window. The browser raised that window
-                # itself via xdg-activation/D-Bus — leave focus alone. Any
-                # manual focuswindow dispatch here would pick an arbitrary window
-                # and drag the user to the wrong workspace.
-                new_addr = _wait_for_new_window(browser_class, timeout_s=4.0)
+                # Wait for the browser to become active — either via a new window
+                # (openwindow event) or an existing window being raised (activewindow
+                # event). The socket is event-driven; no polling or sleep involved.
+                # Timeout of 4s is a pure safety net.
+                addr = _wait_for_browser_activation(browser_class, timeout_s=4.0)
 
-                if new_addr:
+                if addr:
+                    # focuswindow address: follows the window to its monitor and
+                    # workspace — fully display-agnostic.
                     subprocess.run(
-                        ["hyprctl", "dispatch", "focuswindow", f"address:{new_addr}"],
+                        ["hyprctl", "dispatch", "focuswindow", f"address:{addr}"],
                         capture_output=True,
                     )
-                    log.info("focused new browser window address:%s", new_addr)
+                    log.info("focused browser window address:%s", addr)
                 else:
-                    log.info("no new browser window — browser raised existing window, leaving focus alone")
+                    log.info("browser activation not detected within timeout — no focus change")
 
             except Exception as e:
                 log.error("xdg-open error: %s", e)

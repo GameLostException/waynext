@@ -566,9 +566,9 @@ window.background,
     padding: 8px 12px;
     border-bottom: 1px solid alpha(@borders, 0.5);
 }
-.wn-status-dot-ok     { color: #57c75a; font-size: 10px; }
-.wn-status-dot-error  { color: #cc3333; font-size: 10px; }
-.wn-status-dot-none   { color: #888888; font-size: 10px; }
+.wn-status-dot-ok     { color: #57c75a; font-size: 16px; }
+.wn-status-dot-error  { color: #cc3333; font-size: 16px; }
+.wn-status-dot-none   { color: #888888; font-size: 16px; }
 .wn-status-text {
     font-size: 12px;
     color: @dim-label-color;

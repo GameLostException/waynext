@@ -1278,8 +1278,40 @@ class WayNextWindow(Gtk.Window):
         # Remove empty values
         clean_env = {k: v for k, v in clean_env.items() if v}
 
+        def _get_browser_class() -> str:
+            """Derive Hyprland window class from the default browser .desktop file."""
+            try:
+                desktop_file = subprocess.run(
+                    ["xdg-settings", "get", "default-web-browser"],
+                    capture_output=True, text=True, timeout=2,
+                ).stdout.strip()
+                return desktop_file.removesuffix(".desktop")
+            except Exception:
+                return ""
+
+        def _hypr_clients() -> list[dict]:
+            try:
+                r = subprocess.run(
+                    ["hyprctl", "clients", "-j"],
+                    capture_output=True, text=True, timeout=2,
+                )
+                return json.loads(r.stdout) or []
+            except Exception:
+                return []
+
         def _launch() -> None:
             try:
+                # Snapshot existing browser window addresses before opening the
+                # URL so we can detect whether a new window is created.
+                browser_class = _get_browser_class()
+                before_addrs: set[str] = set()
+                if browser_class:
+                    before_addrs = {
+                        c["address"]
+                        for c in _hypr_clients()
+                        if browser_class in (c.get("class") or "")
+                    }
+
                 subprocess.Popen(
                     ["xdg-open", url],
                     env=clean_env,
@@ -1287,30 +1319,45 @@ class WayNextWindow(Gtk.Window):
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                 )
-                log.info("xdg-open launched cleanly")
-                # Focus the browser window via Hyprland after a short delay.
-                # Derive the window class from the default browser's .desktop
-                # file name rather than hardcoding browser names.
-                time.sleep(1.2)
-                try:
-                    desktop_file = subprocess.run(
-                        ["xdg-settings", "get", "default-web-browser"],
+                log.info("xdg-open launched")
+
+                if not browser_class:
+                    log.info("no browser class detected — skipping focus")
+                    return
+
+                # Poll for a new browser window (URL opened in a new window).
+                # Timeout after 4s. If no new window appears the URL opened in
+                # an existing window — the browser already raised it itself via
+                # D-Bus activation, so we must NOT call focuswindow: a class-
+                # based dispatch would pick an arbitrary window and drag focus
+                # to the wrong workspace.
+                new_addr: str = ""
+                deadline = time.monotonic() + 4.0
+                while time.monotonic() < deadline:
+                    time.sleep(0.15)
+                    new_windows = [
+                        c for c in _hypr_clients()
+                        if browser_class in (c.get("class") or "")
+                        and c["address"] not in before_addrs
+                    ]
+                    if new_windows:
+                        new_addr = new_windows[0]["address"]
+                        log.info("new browser window detected: %s", new_addr)
+                        break
+
+                if new_addr:
+                    # New window — focus by exact address so we land on the
+                    # right window regardless of which workspace it opened on.
+                    subprocess.run(
+                        ["hyprctl", "dispatch", "focuswindow", f"address:{new_addr}"],
                         capture_output=True,
-                        text=True,
-                        timeout=2,
-                    ).stdout.strip()
-                    # Desktop file is e.g. "firefox.desktop" or
-                    # "google-chrome.desktop" — strip the extension for the
-                    # window class (Hyprland class typically matches).
-                    window_class = desktop_file.removesuffix(".desktop")
-                    if window_class:
-                        subprocess.run(
-                            ["hyprctl", "dispatch", "focuswindow", f"class:{window_class}"],
-                            capture_output=True,
-                        )
-                        log.info("focused window class:%s", window_class)
-                except Exception as e:
-                    log.warning("could not focus browser: %s", e)
+                    )
+                    log.info("focused new browser window address:%s", new_addr)
+                else:
+                    # No new window — tab opened in existing window. Browser
+                    # raised it via D-Bus; leave focus alone.
+                    log.info("no new browser window — leaving focus alone")
+
             except Exception as e:
                 log.error("xdg-open error: %s", e)
 

@@ -681,6 +681,127 @@ class ClickCatcher(Gtk.Window):
         self.set_visible(False)
 
 
+# ── Browser focus helpers ─────────────────────────────────────────────────────
+
+
+def _hypr_socket2_path() -> str | None:
+    """Resolve the Hyprland event socket2 path."""
+    uid = os.getuid()
+    base = Path(f"/run/user/{uid}/hypr")
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    if sig:
+        candidate = base / sig / ".socket2.sock"
+        if candidate.exists():
+            return str(candidate)
+    try:
+        dirs = sorted(
+            (d for d in base.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for d in dirs:
+            c = d / ".socket2.sock"
+            if c.exists():
+                return str(c)
+    except Exception:
+        pass
+    return None
+
+
+def _browser_addrs_before(browser_class: str) -> set[str]:
+    """
+    Return the set of raw (no-0x) addresses of all current browser windows.
+    Called before xdg-open so we can match urgent/windowtitle events that
+    carry addresses without the 0x prefix.
+    """
+    try:
+        r = subprocess.run(
+            ["hyprctl", "clients", "-j"],
+            capture_output=True, text=True, timeout=2,
+        )
+        return {
+            c["address"].removeprefix("0x")
+            for c in json.loads(r.stdout)
+            if browser_class.lower() in (c.get("class") or "").lower()
+        }
+    except Exception:
+        return set()
+
+
+def _wait_for_browser_activation(browser_class: str, known_before: set[str], timeout_s: float) -> str:
+    """
+    Subscribe to the Hyprland event socket and wait for the browser to signal
+    it received the URL after xdg-open is called.
+
+    Chrome does NOT emit activewindow when opening a URL in an existing window.
+    Instead it emits:
+      urgent>>addr        — immediately when the new tab opens
+      windowtitle>>addr   — when the page title updates (fallback)
+
+    Both carry the raw address without 0x prefix. We match against
+    known_before (browser addresses snapshotted before xdg-open).
+
+    For a brand-new browser window, openwindow>>addr,ws,class,title fires.
+
+    Returns "0x<addr>" to pass to focuswindow, or "" on timeout.
+    focuswindow address: is display-agnostic — it follows the window to
+    whatever monitor/workspace it lives on.
+    """
+    import select as _select
+
+    sock_path = _hypr_socket2_path()
+    if not sock_path:
+        log.warning("Hyprland socket2 not found — cannot watch for browser activation")
+        return ""
+
+    deadline = time.monotonic() + timeout_s
+    buf = ""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.connect(sock_path)
+            s.setblocking(False)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                ready, _, _ = _select.select([s], [], [], remaining)
+                if not ready:
+                    break
+                chunk = s.recv(4096).decode("utf-8", errors="replace")
+                if not chunk:
+                    break
+                buf += chunk
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+
+                    # openwindow>>addr,ws,class,title — new window
+                    if line.startswith("openwindow>>"):
+                        parts = line[len("openwindow>>"):].split(",", 3)
+                        if len(parts) >= 3 and browser_class.lower() in parts[2].lower():
+                            addr_raw = parts[0]
+                            addr = addr_raw if addr_raw.startswith("0x") else f"0x{addr_raw}"
+                            log.info("openwindow: addr=%s", addr)
+                            return addr
+
+                    # urgent>>addr — browser requests attention for new tab (primary)
+                    elif line.startswith("urgent>>"):
+                        addr_raw = line[len("urgent>>"):].strip()
+                        if addr_raw in known_before:
+                            log.info("urgent from browser: addr=%s", addr_raw)
+                            return f"0x{addr_raw}"
+
+                    # windowtitle>>addr — title update on browser window (fallback)
+                    elif line.startswith("windowtitle>>"):
+                        addr_raw = line[len("windowtitle>>"):].strip()
+                        if addr_raw in known_before:
+                            log.info("windowtitle from browser: addr=%s", addr_raw)
+                            return f"0x{addr_raw}"
+
+    except Exception as e:
+        log.warning("socket watch error: %s", e)
+    return ""
+
+
 class WayNextWindow(Gtk.Window):
     """GTK4 popup window for waynext."""
 
@@ -864,8 +985,6 @@ class WayNextWindow(Gtk.Window):
         lbr.set_child(box)
         lbr.set_activatable(False)
         lbr.set_can_focus(False)
-
-        return lbr
 
         return lbr
 
@@ -1275,141 +1394,23 @@ class WayNextWindow(Gtk.Window):
             ),
             "MOZ_ENABLE_WAYLAND": "1",
         }
-        # Remove empty values
         clean_env = {k: v for k, v in clean_env.items() if v}
-
-        def _get_browser_class() -> str:
-            """Derive Hyprland window class from the default browser .desktop file."""
-            try:
-                desktop_file = subprocess.run(
-                    ["xdg-settings", "get", "default-web-browser"],
-                    capture_output=True, text=True, timeout=2,
-                ).stdout.strip()
-                return desktop_file.removesuffix(".desktop")
-            except Exception:
-                return ""
-
-        def _hypr_socket2_path() -> str | None:
-            """Resolve the Hyprland event socket2 path."""
-            uid = os.getuid()
-            base = Path(f"/run/user/{uid}/hypr")
-            sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
-            if sig:
-                candidate = base / sig / ".socket2.sock"
-                if candidate.exists():
-                    return str(candidate)
-            try:
-                dirs = sorted(
-                    (d for d in base.iterdir() if d.is_dir()),
-                    key=lambda d: d.stat().st_mtime,
-                    reverse=True,
-                )
-                for d in dirs:
-                    c = d / ".socket2.sock"
-                    if c.exists():
-                        return str(c)
-            except Exception:
-                pass
-            return None
-
-        def _wait_for_browser_activation(browser_class: str, timeout_s: float) -> str:
-            """
-            Subscribe to the Hyprland event socket and wait for the browser
-            to signal it received the URL after xdg-open is called.
-
-            Chrome (and most browsers) do NOT emit activewindow or openwindow
-            when opening a URL in an existing window. Instead they emit:
-              urgent>>addr        — sent immediately when the tab opens
-              windowtitle>>addr   — sent when the page title is set
-
-            Both carry the raw address (no 0x prefix). We use urgent as the
-            primary signal (fires first), with windowtitle as fallback, both
-            filtered to browser windows by checking class via hyprctl clients.
-
-            For a brand-new browser window, openwindow fires as normal.
-
-            Returns the window address ("0x...") to focuswindow, or "" on
-            timeout. focuswindow address: is display-agnostic — it follows
-            the window to whatever monitor/workspace it lives on.
-            """
-            sock_path = _hypr_socket2_path()
-            if not sock_path:
-                log.warning("Hyprland socket2 not found — cannot watch for browser activation")
-                return ""
-
-            import select as _select
-
-            # Build a set of known browser addresses before we start, so
-            # windowtitle events from unrelated browser windows don't match.
-            # We resolve this once — fast, happens before xdg-open.
-            def _browser_addrs() -> set[str]:
-                try:
-                    r = subprocess.run(
-                        ["hyprctl", "clients", "-j"],
-                        capture_output=True, text=True, timeout=2,
-                    )
-                    return {
-                        c["address"].lstrip("0x")
-                        for c in json.loads(r.stdout)
-                        if browser_class.lower() in (c.get("class") or "").lower()
-                    }
-                except Exception:
-                    return set()
-
-            known_before = _browser_addrs()
-
-            deadline = time.monotonic() + timeout_s
-            buf = ""
-            try:
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                    s.connect(sock_path)
-                    s.setblocking(False)
-                    while True:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            break
-                        ready, _, _ = _select.select([s], [], [], remaining)
-                        if not ready:
-                            break
-                        chunk = s.recv(4096).decode("utf-8", errors="replace")
-                        if not chunk:
-                            break
-                        buf += chunk
-                        while "\n" in buf:
-                            line, buf = buf.split("\n", 1)
-
-                            # openwindow>>addr,ws,class,title — new window
-                            if line.startswith("openwindow>>"):
-                                parts = line[len("openwindow>>"):].split(",", 3)
-                                if len(parts) >= 3 and browser_class.lower() in parts[2].lower():
-                                    addr_raw = parts[0]
-                                    addr = addr_raw if addr_raw.startswith("0x") else f"0x{addr_raw}"
-                                    log.info("openwindow: addr=%s", addr)
-                                    return addr
-
-                            # urgent>>addr — browser requests attention for new tab
-                            elif line.startswith("urgent>>"):
-                                addr_raw = line[len("urgent>>"):].strip()
-                                if addr_raw in known_before:
-                                    addr = f"0x{addr_raw}"
-                                    log.info("urgent from browser: addr=%s", addr)
-                                    return addr
-
-                            # windowtitle>>addr — fallback: title set on browser window
-                            elif line.startswith("windowtitle>>"):
-                                addr_raw = line[len("windowtitle>>"):].strip()
-                                if addr_raw in known_before:
-                                    addr = f"0x{addr_raw}"
-                                    log.info("windowtitle from browser: addr=%s", addr)
-                                    return addr
-
-            except Exception as e:
-                log.warning("socket watch error: %s", e)
-            return ""
 
         def _launch() -> None:
             try:
-                browser_class = _get_browser_class()
+                # Derive browser window class from xdg-settings (browser-agnostic).
+                try:
+                    desktop_file = subprocess.run(
+                        ["xdg-settings", "get", "default-web-browser"],
+                        capture_output=True, text=True, timeout=2,
+                    ).stdout.strip()
+                    browser_class = desktop_file.removesuffix(".desktop")
+                except Exception:
+                    browser_class = ""
+
+                # Snapshot existing browser window addresses before opening so
+                # the socket watcher can match urgent/windowtitle events.
+                known_before = _browser_addrs_before(browser_class) if browser_class else set()
 
                 subprocess.Popen(
                     ["xdg-open", url],
@@ -1424,15 +1425,13 @@ class WayNextWindow(Gtk.Window):
                     log.info("no browser class detected — skipping focus")
                     return
 
-                # Wait for the browser to become active — either via a new window
-                # (openwindow event) or an existing window being raised (activewindow
-                # event). The socket is event-driven; no polling or sleep involved.
+                # Wait for the browser to signal it received the URL.
+                # Event-driven via Hyprland socket — no polling, no sleep.
                 # Timeout of 4s is a pure safety net.
-                addr = _wait_for_browser_activation(browser_class, timeout_s=4.0)
+                addr = _wait_for_browser_activation(browser_class, known_before, timeout_s=4.0)
 
                 if addr:
-                    # focuswindow address: follows the window to its monitor and
-                    # workspace — fully display-agnostic.
+                    # focuswindow address: follows the window to its monitor/workspace
                     subprocess.run(
                         ["hyprctl", "dispatch", "focuswindow", f"address:{addr}"],
                         capture_output=True,

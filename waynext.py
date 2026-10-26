@@ -1289,28 +1289,89 @@ class WayNextWindow(Gtk.Window):
             except Exception:
                 return ""
 
-        def _hypr_clients() -> list[dict]:
+        def _hypr_socket2_path() -> str | None:
+            """Resolve the Hyprland event socket2 path."""
+            uid = os.getuid()
+            base = Path(f"/run/user/{uid}/hypr")
+            sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+            if sig:
+                candidate = base / sig / ".socket2.sock"
+                if candidate.exists():
+                    return str(candidate)
             try:
-                r = subprocess.run(
-                    ["hyprctl", "clients", "-j"],
-                    capture_output=True, text=True, timeout=2,
+                dirs = sorted(
+                    (d for d in base.iterdir() if d.is_dir()),
+                    key=lambda d: d.stat().st_mtime,
+                    reverse=True,
                 )
-                return json.loads(r.stdout) or []
+                for d in dirs:
+                    c = d / ".socket2.sock"
+                    if c.exists():
+                        return str(c)
             except Exception:
-                return []
+                pass
+            return None
+
+        def _wait_for_new_window(browser_class: str, timeout_s: float) -> str:
+            """
+            Subscribe to the Hyprland event socket and wait for an openwindow
+            event whose class matches browser_class.
+
+            Returns the window address string (e.g. "0x...") if a new window
+            opened within timeout_s seconds, or "" if it timed out (meaning
+            the URL opened as a tab in an existing window — no focus action
+            needed).
+
+            This is event-driven: the socket pushes openwindow the instant
+            Hyprland maps the new surface, so there is no polling or sleep.
+            The timeout is a hard safety net only.
+            """
+            sock_path = _hypr_socket2_path()
+            if not sock_path:
+                log.warning("Hyprland socket2 not found — cannot watch for new window")
+                return ""
+
+            import select as _select
+
+            deadline = time.monotonic() + timeout_s
+            buf = ""
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.connect(sock_path)
+                    s.setblocking(False)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        ready, _, _ = _select.select([s], [], [], remaining)
+                        if not ready:
+                            break  # timed out
+                        chunk = s.recv(4096).decode("utf-8", errors="replace")
+                        if not chunk:
+                            break  # socket closed
+                        buf += chunk
+                        while "\n" in buf:
+                            line, buf = buf.split("\n", 1)
+                            # openwindow event format:
+                            #   openwindow>>address,workspacenum,class,title
+                            if not line.startswith("openwindow>>"):
+                                continue
+                            payload = line[len("openwindow>>"):]
+                            parts = payload.split(",", 3)
+                            if len(parts) < 3:
+                                continue
+                            addr_raw, _ws, win_class = parts[0], parts[1], parts[2]
+                            if browser_class.lower() in win_class.lower():
+                                addr = addr_raw if addr_raw.startswith("0x") else f"0x{addr_raw}"
+                                log.info("openwindow event: class=%s addr=%s", win_class, addr)
+                                return addr
+            except Exception as e:
+                log.warning("socket watch error: %s", e)
+            return ""
 
         def _launch() -> None:
             try:
-                # Snapshot existing browser window addresses before opening the
-                # URL so we can detect whether a new window is created.
                 browser_class = _get_browser_class()
-                before_addrs: set[str] = set()
-                if browser_class:
-                    before_addrs = {
-                        c["address"]
-                        for c in _hypr_clients()
-                        if browser_class in (c.get("class") or "")
-                    }
 
                 subprocess.Popen(
                     ["xdg-open", url],
@@ -1325,38 +1386,25 @@ class WayNextWindow(Gtk.Window):
                     log.info("no browser class detected — skipping focus")
                     return
 
-                # Poll for a new browser window (URL opened in a new window).
-                # Timeout after 4s. If no new window appears the URL opened in
-                # an existing window — the browser already raised it itself via
-                # D-Bus activation, so we must NOT call focuswindow: a class-
-                # based dispatch would pick an arbitrary window and drag focus
-                # to the wrong workspace.
-                new_addr: str = ""
-                deadline = time.monotonic() + 4.0
-                while time.monotonic() < deadline:
-                    time.sleep(0.15)
-                    new_windows = [
-                        c for c in _hypr_clients()
-                        if browser_class in (c.get("class") or "")
-                        and c["address"] not in before_addrs
-                    ]
-                    if new_windows:
-                        new_addr = new_windows[0]["address"]
-                        log.info("new browser window detected: %s", new_addr)
-                        break
+                # Wait for Hyprland to emit an openwindow event for the browser.
+                # The socket pushes the event the instant the surface is mapped —
+                # no polling, no sleep. Timeout of 4s is a pure safety net.
+                #
+                # If no openwindow fires within the timeout, the URL opened as
+                # a new tab in an existing window. The browser raised that window
+                # itself via xdg-activation/D-Bus — leave focus alone. Any
+                # manual focuswindow dispatch here would pick an arbitrary window
+                # and drag the user to the wrong workspace.
+                new_addr = _wait_for_new_window(browser_class, timeout_s=4.0)
 
                 if new_addr:
-                    # New window — focus by exact address so we land on the
-                    # right window regardless of which workspace it opened on.
                     subprocess.run(
                         ["hyprctl", "dispatch", "focuswindow", f"address:{new_addr}"],
                         capture_output=True,
                     )
                     log.info("focused new browser window address:%s", new_addr)
                 else:
-                    # No new window — tab opened in existing window. Browser
-                    # raised it via D-Bus; leave focus alone.
-                    log.info("no new browser window — leaving focus alone")
+                    log.info("no new browser window — browser raised existing window, leaving focus alone")
 
             except Exception as e:
                 log.error("xdg-open error: %s", e)

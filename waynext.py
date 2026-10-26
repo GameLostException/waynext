@@ -1632,9 +1632,13 @@ def main() -> None:
         # Interval comes from config (refresh_interval_min), rescheduled on save.
         window._start_poll_timer()
 
-        if cmd in ("show", "toggle"):
-            window.set_visible(True)
-            window.present()
+        # Always realize the window at startup — a layer-shell window that has
+        # never been presented cannot be shown later via set_visible(True).
+        # Present it unconditionally, then hide immediately if not requested.
+        window.set_visible(True)
+        window.present()
+        if cmd not in ("show", "toggle"):
+            window._do_hide()
 
     app.connect("activate", on_activate)
     app.run([])

@@ -610,7 +610,7 @@ window.background,
     min-width: 0;
     min-height: 0;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 14px;
 }
 .wn-visio-btn-grey { color: alpha(#c5c8c6, 0.3); }
 .wn-empty-label {

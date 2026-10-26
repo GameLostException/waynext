@@ -788,6 +788,7 @@ class WayNextWindow(Gtk.Window):
     def _setup_layer_shell(self) -> None:
         Gtk4LayerShell.init_for_window(self)
         Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
+        Gtk4LayerShell.set_namespace(self, "waynext")
         Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.TOP, True)
         Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.RIGHT, True)
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.TOP, MARGIN_TOP)
@@ -1292,9 +1293,9 @@ class WayNextWindow(Gtk.Window):
             self._hide_timer_id = 0
 
     def _schedule_hide(self) -> None:
-        """Schedule auto-hide 500ms after mouse leaves the popup."""
+        """Schedule auto-hide 1000ms after mouse leaves the popup."""
         self._cancel_hide()
-        self._hide_timer_id = GLib.timeout_add(500, self._do_hide)
+        self._hide_timer_id = GLib.timeout_add(1000, self._do_hide)
 
     def _do_hide(self) -> None:
         self._cancel_hide()
@@ -1634,11 +1635,12 @@ def main() -> None:
 
         # Always realize the window at startup — a layer-shell window that has
         # never been presented cannot be shown later via set_visible(True).
-        # Present it unconditionally, then hide immediately if not requested.
+        # Present it, then hide after one GLib iteration if not requested,
+        # giving GTK time to map the surface with the compositor.
         window.set_visible(True)
         window.present()
         if cmd not in ("show", "toggle"):
-            window._do_hide()
+            GLib.timeout_add(100, lambda: (window._do_hide(), False)[1])
 
     app.connect("activate", on_activate)
     app.run([])

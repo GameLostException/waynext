@@ -646,54 +646,6 @@ window.background,
 """
 
 
-class ClickCatcher(Gtk.Window):
-    """Fullscreen transparent layer-shell window that captures clicks outside the popup.
-
-    Sits on the TOP layer (below the popup's OVERLAY layer), anchored to all
-    four edges so it covers the entire screen. Any click on it means the user
-    clicked outside the popup — so we close both.
-    """
-
-    def __init__(self, on_click: Callable[[], None]) -> None:
-        super().__init__()
-        Gtk4LayerShell.init_for_window(self)
-        Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.TOP)
-        for edge in (
-            Gtk4LayerShell.Edge.TOP,
-            Gtk4LayerShell.Edge.BOTTOM,
-            Gtk4LayerShell.Edge.LEFT,
-            Gtk4LayerShell.Edge.RIGHT,
-        ):
-            Gtk4LayerShell.set_anchor(self, edge, True)
-        # Leave room for the waybar at the top so we don't intercept its clicks
-        Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.TOP, 28)
-        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.NONE)
-
-        self.set_decorated(False)
-        # Near-transparent background — fully transparent (alpha=0) causes
-        # Hyprland to skip pointer event routing for the surface.
-        provider = Gtk.CssProvider()
-        provider.load_from_string("window { background: rgba(0,0,0,0.01); }")
-        Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(),
-            provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_USER + 1,
-        )
-
-        # Any click → close popup, but ignore clicks within 300ms of showing
-        # (the opening click is still propagating and would immediately re-close).
-        self._shown_at: float = 0.0
-
-        gesture = Gtk.GestureClick()
-        gesture.connect(
-            "released",
-            lambda *_: on_click() if time.monotonic() - self._shown_at > 0.3 else None,
-        )
-        self.add_controller(gesture)
-
-        self.set_visible(False)
-
-
 # ── Browser focus helpers ─────────────────────────────────────────────────────
 
 
@@ -828,10 +780,6 @@ class WayNextWindow(Gtk.Window):
         self._setup_css()
         self._build_ui()
 
-        # Transparent fullscreen click-catcher — shown behind popup to
-        # capture clicks outside and close the popup.
-        self._catcher: ClickCatcher | None = None
-
         self._cal = CalWorker(on_update=self._on_cal_update)
         self._cal.fetch()
 
@@ -897,8 +845,6 @@ class WayNextWindow(Gtk.Window):
         self._settings_revealer.set_transition_duration(150)
         outer.append(self._settings_revealer)
 
-        # Close on focus loss (click outside) handled by ClickCatcher window.
-
         # Escape to close
         key_ctrl = Gtk.EventControllerKey()
         key_ctrl.connect("key-pressed", self._on_key)
@@ -913,7 +859,6 @@ class WayNextWindow(Gtk.Window):
         self._poll_timer_id: int | None = None
         self._imminent_timer_id: int = 0
         self._hide_timer_id: int = 0
-        self._hidden_at: float = 0.0  # monotonic timestamp of last hide
 
     def _build_status_row(self) -> Gtk.Box:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -1353,10 +1298,7 @@ class WayNextWindow(Gtk.Window):
 
     def _do_hide(self) -> None:
         self._cancel_hide()
-        self._hidden_at = time.monotonic()
         self.set_visible(False)
-        if self._catcher:
-            self._catcher.set_visible(False)
         if self._settings_open:
             self._close_settings(save=False)
 
@@ -1583,15 +1525,7 @@ class IPCServer:
 
     def _show(self) -> None:
         win = self._window
-        # If the popup was just hidden (e.g. by the ClickCatcher intercepting
-        # the same click that triggered this toggle), don't re-open it.
-        # 350ms covers the ClickCatcher → IPC round-trip race.
-        if time.monotonic() - win._hidden_at < 0.35:
-            return
         win._cancel_hide()
-        if win._catcher:
-            win._catcher._shown_at = time.monotonic()
-            win._catcher.set_visible(True)
         win.set_visible(True)
         win.present()
         win.poll()
@@ -1678,12 +1612,6 @@ def main() -> None:
         window = WayNextWindow()
         window.set_application(app)
         app.add_window(window)
-
-        # Click-catcher — fullscreen transparent window behind the popup
-        catcher = ClickCatcher(on_click=window._do_hide)
-        catcher.set_application(app)
-        app.add_window(catcher)
-        window._catcher = catcher
 
         IPCServer(window)
 

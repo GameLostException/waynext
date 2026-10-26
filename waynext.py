@@ -281,16 +281,24 @@ def classify_next_meeting(meetings: list[Meeting], domain: str) -> str:
 def minutes_label(meetings: list[Meeting]) -> str:
     """Return minutes until next upcoming meeting, e.g. '7m'.
 
-    Skips meetings already in progress. Returns '' when nothing is upcoming.
+    Returns '0m' when the meeting is less than 1 minute away (imminent).
+    Returns '' when nothing is upcoming.
     """
     m = _next_upcoming(meetings)
     if m is None:
         return ""
     now = datetime.now(timezone.utc)
     mins = int((m.start - now).total_seconds() / 60)
-    if mins <= 0:
-        return ""
-    return f"{mins}m"
+    return f"{mins}m"  # mins==0 means < 1 min away → show "0m"
+
+
+def is_imminent(meetings: list[Meeting]) -> bool:
+    """Return True when the next meeting is less than 1 minute away."""
+    m = _next_upcoming(meetings)
+    if m is None:
+        return False
+    secs = (m.start - datetime.now(timezone.utc)).total_seconds()
+    return 0 < secs < 60
 
 
 def waybar_json(state: CalState, cfg: dict) -> str:
@@ -301,6 +309,10 @@ def waybar_json(state: CalState, cfg: dict) -> str:
         css_class = classify_next_meeting(state.meetings, cfg["internal_domain"])
     label = minutes_label(state.meetings) if state.status == "ok" else ""
     text = f"󰃭 {label}" if label else "󰃭"
+    # Append "imminent" class when < 1 min away so waybar can animate the widget.
+    # Waybar supports multiple space-separated classes in the "class" field.
+    if state.status == "ok" and is_imminent(state.meetings):
+        css_class = f"{css_class} imminent"
     return json.dumps({"text": text, "class": css_class, "tooltip": ""}, ensure_ascii=False)
 
 
@@ -892,6 +904,7 @@ class WayNextWindow(Gtk.Window):
         self.add_controller(key_ctrl)
 
         self._poll_timer_id: int | None = None
+        self._imminent_timer_id: int = 0
 
     def _build_status_row(self) -> Gtk.Box:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -1202,6 +1215,7 @@ class WayNextWindow(Gtk.Window):
     def _on_cal_update(self, state: CalState) -> None:
         self._refresh_status(state)
         self._refresh_meetings(state)
+        self._schedule_imminent_signal(state)
 
     def _refresh_status(self, state: CalState) -> None:
         if state.status == "ok":
@@ -1265,6 +1279,55 @@ class WayNextWindow(Gtk.Window):
 
         self._poll_timer_id = GLib.timeout_add_seconds(interval_s, _tick)
         log.info("poll timer set to every %ds", interval_s)
+
+    def _schedule_imminent_signal(self, state: CalState) -> None:
+        """
+        Schedule a one-shot GLib timer to send SIGRTMIN+1 to waybar exactly
+        when the next meeting is 60s away (transitions into imminent state).
+
+        waybar's custom/waynext module has signal:1, so SIGRTMIN+1 causes it
+        to immediately re-execute waynext-status and update the widget — no
+        need to wait for the 30s poll interval.
+
+        Called on every calendar update so the timer is always fresh.
+        """
+        # Cancel any previously scheduled imminent timer
+        if hasattr(self, "_imminent_timer_id") and self._imminent_timer_id:
+            GLib.source_remove(self._imminent_timer_id)
+            self._imminent_timer_id = 0
+
+        if state.status != "ok":
+            return
+
+        m = _next_upcoming(state.meetings)
+        if m is None:
+            return
+
+        secs_until = (m.start - datetime.now(timezone.utc)).total_seconds()
+        # Schedule signal for 60s before start (transition into imminent state).
+        # Also schedule one for start-time itself (transition out of imminent).
+        delay_to_imminent = secs_until - 60
+        if 0 < delay_to_imminent < 3600:
+            def _fire_imminent() -> bool:
+                log.info("imminent threshold reached — signalling waybar")
+                subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
+                self._imminent_timer_id = 0
+                # Schedule another signal at start time to clear imminent state
+                secs_left = (m.start - datetime.now(timezone.utc)).total_seconds()
+                if 0 < secs_left < 120:
+                    def _fire_start() -> bool:
+                        subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
+                        return False
+                    GLib.timeout_add_seconds(max(1, int(secs_left)), _fire_start)
+                return False  # one-shot
+
+            self._imminent_timer_id = GLib.timeout_add_seconds(
+                max(1, int(delay_to_imminent)), _fire_imminent
+            )
+            log.info("imminent signal scheduled in %.0fs", delay_to_imminent)
+        elif 0 < secs_until <= 60:
+            # Already in imminent window — signal immediately
+            subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────
 

@@ -66,9 +66,21 @@ def minutes_label(meetings: list[dict]) -> str:
         start = datetime.fromisoformat(m["start"])
         now   = datetime.now(timezone.utc)
         mins  = int((start - now).total_seconds() / 60)
-        return f"{mins}m" if mins > 0 else ""
+        return f"{mins}m"  # 0m when < 1 min away
     except Exception:
         return ""
+
+
+def is_imminent(meetings: list[dict]) -> bool:
+    """True when the next meeting is less than 1 minute away."""
+    m = next_meeting(meetings)
+    if m is None:
+        return False
+    try:
+        secs = (datetime.fromisoformat(m["start"]) - datetime.now(timezone.utc)).total_seconds()
+        return 0 < secs < 60
+    except Exception:
+        return False
 
 
 STATE_MAX_AGE_SEC = 600   # treat state file as stale after 10 minutes
@@ -102,10 +114,13 @@ def main() -> None:
                           ensure_ascii=False))
         return
 
-    domain     = load_domain()
-    css_class  = classify(meetings, domain)
-    label      = minutes_label(meetings)
-    text       = f"{ICON} {label}" if label else ICON
+    domain    = load_domain()
+    css_class = classify(meetings, domain)
+    label     = minutes_label(meetings)
+    text      = f"{ICON} {label}" if label else ICON
+
+    if is_imminent(meetings):
+        css_class = f"{css_class} imminent"
 
     print(json.dumps({"text": text, "class": css_class, "tooltip": ""},
                       ensure_ascii=False))

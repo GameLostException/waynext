@@ -913,6 +913,7 @@ class WayNextWindow(Gtk.Window):
         self._poll_timer_id: int | None = None
         self._imminent_timer_id: int = 0
         self._hide_timer_id: int = 0
+        self._hidden_at: float = 0.0  # monotonic timestamp of last hide
 
     def _build_status_row(self) -> Gtk.Box:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -1352,6 +1353,7 @@ class WayNextWindow(Gtk.Window):
 
     def _do_hide(self) -> None:
         self._cancel_hide()
+        self._hidden_at = time.monotonic()
         self.set_visible(False)
         if self._catcher:
             self._catcher.set_visible(False)
@@ -1581,6 +1583,11 @@ class IPCServer:
 
     def _show(self) -> None:
         win = self._window
+        # If the popup was just hidden (e.g. by the ClickCatcher intercepting
+        # the same click that triggered this toggle), don't re-open it.
+        # 350ms covers the ClickCatcher → IPC round-trip race.
+        if time.monotonic() - win._hidden_at < 0.35:
+            return
         win._cancel_hide()
         if win._catcher:
             win._catcher._shown_at = time.monotonic()

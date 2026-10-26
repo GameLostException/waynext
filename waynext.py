@@ -977,8 +977,8 @@ class WayNextWindow(Gtk.Window):
         left_btn.set_child(left_box)
         box.append(left_btn)
 
-        # Visio open button — 󰏌 open-in-new icon
-        visio_btn = Gtk.Button(label="󰏌")
+        # Visio open button — 󰕧 phone-in-talk icon
+        visio_btn = Gtk.Button(label="󰕧")
         visio_btn.add_css_class("wn-visio-btn")
         visio_btn.add_css_class("flat")
         # Copy-to-clipboard button — 󰆏 content-copy icon

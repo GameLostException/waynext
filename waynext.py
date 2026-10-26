@@ -578,6 +578,7 @@ window.background,
     border-radius: 4px;
     min-width: 0;
     min-height: 0;
+    font-size: 16px;
 }
 .wn-meeting-row {
     padding: 7px 12px;
@@ -610,7 +611,7 @@ window.background,
     min-width: 0;
     min-height: 0;
     border-radius: 4px;
-    font-size: 14px;
+    font-size: 16px;
 }
 .wn-visio-btn-grey { color: alpha(#c5c8c6, 0.3); }
 .wn-empty-label {

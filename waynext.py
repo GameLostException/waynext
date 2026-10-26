@@ -904,8 +904,15 @@ class WayNextWindow(Gtk.Window):
         key_ctrl.connect("key-pressed", self._on_key)
         self.add_controller(key_ctrl)
 
+        # Auto-hide on mouse leave (mirrors wayblue behaviour)
+        motion = Gtk.EventControllerMotion()
+        motion.connect("enter", lambda *_: self._cancel_hide())
+        motion.connect("leave", lambda *_: self._schedule_hide())
+        self.add_controller(motion)
+
         self._poll_timer_id: int | None = None
         self._imminent_timer_id: int = 0
+        self._hide_timer_id: int = 0
 
     def _build_status_row(self) -> Gtk.Box:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -1332,7 +1339,19 @@ class WayNextWindow(Gtk.Window):
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────
 
+    def _cancel_hide(self) -> None:
+        """Cancel any pending mouse-leave auto-hide."""
+        if self._hide_timer_id:
+            GLib.source_remove(self._hide_timer_id)
+            self._hide_timer_id = 0
+
+    def _schedule_hide(self) -> None:
+        """Schedule auto-hide 500ms after mouse leaves the popup."""
+        self._cancel_hide()
+        self._hide_timer_id = GLib.timeout_add(500, self._do_hide)
+
     def _do_hide(self) -> None:
+        self._cancel_hide()
         self.set_visible(False)
         if self._catcher:
             self._catcher.set_visible(False)
@@ -1562,6 +1581,7 @@ class IPCServer:
 
     def _show(self) -> None:
         win = self._window
+        win._cancel_hide()
         if win._catcher:
             win._catcher._shown_at = time.monotonic()
             win._catcher.set_visible(True)

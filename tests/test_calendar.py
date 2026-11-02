@@ -282,6 +282,7 @@ def test_minutes_label_shows_zero_when_imminent() -> None:
     from datetime import datetime, timedelta, timezone
 
     from waynext import Meeting, minutes_label
+
     start = datetime.now(timezone.utc) + timedelta(seconds=30)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert minutes_label([m]) == "0m"
@@ -292,6 +293,7 @@ def test_minutes_label_returns_empty_when_no_upcoming() -> None:
     from datetime import datetime, timedelta, timezone
 
     from waynext import Meeting, minutes_label
+
     start = datetime.now(timezone.utc) - timedelta(minutes=5)
     m = Meeting("id", "Past", start, start, "http://x")
     assert minutes_label([m]) == ""
@@ -301,6 +303,7 @@ def test_is_imminent_true_within_60s() -> None:
     from datetime import datetime, timedelta, timezone
 
     from waynext import Meeting, is_imminent
+
     start = datetime.now(timezone.utc) + timedelta(seconds=45)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert is_imminent([m]) is True
@@ -311,6 +314,7 @@ def test_is_imminent_true_between_1_and_2_min() -> None:
     from datetime import datetime, timedelta, timezone
 
     from waynext import Meeting, is_imminent
+
     start = datetime.now(timezone.utc) + timedelta(seconds=90)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert is_imminent([m]) is True
@@ -321,6 +325,7 @@ def test_is_imminent_false_at_2min() -> None:
     from datetime import datetime, timedelta, timezone
 
     from waynext import Meeting, is_imminent
+
     start = datetime.now(timezone.utc) + timedelta(seconds=125)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert is_imminent([m]) is False
@@ -330,6 +335,7 @@ def test_is_imminent_false_at_3min() -> None:
     from datetime import datetime, timedelta, timezone
 
     from waynext import Meeting, is_imminent
+
     start = datetime.now(timezone.utc) + timedelta(minutes=3)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert is_imminent([m]) is False
@@ -340,6 +346,7 @@ def test_is_imminent_false_when_started() -> None:
     from datetime import datetime, timedelta, timezone
 
     from waynext import Meeting, is_imminent
+
     start = datetime.now(timezone.utc) - timedelta(seconds=10)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert is_imminent([m]) is False

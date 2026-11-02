@@ -279,8 +279,9 @@ def test_minutes_label_empty_when_all_past() -> None:
 
 def test_minutes_label_shows_zero_when_imminent() -> None:
     """minutes_label returns '0m' when meeting is < 1 min away."""
-    from waynext import minutes_label, Meeting
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
+
+    from waynext import Meeting, minutes_label
     start = datetime.now(timezone.utc) + timedelta(seconds=30)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert minutes_label([m]) == "0m"
@@ -288,33 +289,57 @@ def test_minutes_label_shows_zero_when_imminent() -> None:
 
 def test_minutes_label_returns_empty_when_no_upcoming() -> None:
     """minutes_label returns '' when no upcoming meetings."""
-    from waynext import minutes_label, Meeting
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
+
+    from waynext import Meeting, minutes_label
     start = datetime.now(timezone.utc) - timedelta(minutes=5)
     m = Meeting("id", "Past", start, start, "http://x")
     assert minutes_label([m]) == ""
 
 
 def test_is_imminent_true_within_60s() -> None:
-    from waynext import is_imminent, Meeting
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
+
+    from waynext import Meeting, is_imminent
     start = datetime.now(timezone.utc) + timedelta(seconds=45)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert is_imminent([m]) is True
 
 
+def test_is_imminent_true_between_1_and_2_min() -> None:
+    """Pulse starts at < 2 min — label shows '1m', should be imminent."""
+    from datetime import datetime, timedelta, timezone
+
+    from waynext import Meeting, is_imminent
+    start = datetime.now(timezone.utc) + timedelta(seconds=90)
+    m = Meeting("id", "Standup", start, start, "http://x")
+    assert is_imminent([m]) is True
+
+
 def test_is_imminent_false_at_2min() -> None:
-    from waynext import is_imminent, Meeting
-    from datetime import datetime, timezone, timedelta
-    start = datetime.now(timezone.utc) + timedelta(minutes=2)
+    """125 seconds away — comfortably above the 120s threshold, not imminent."""
+    from datetime import datetime, timedelta, timezone
+
+    from waynext import Meeting, is_imminent
+    start = datetime.now(timezone.utc) + timedelta(seconds=125)
+    m = Meeting("id", "Standup", start, start, "http://x")
+    assert is_imminent([m]) is False
+
+
+def test_is_imminent_false_at_3min() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from waynext import Meeting, is_imminent
+    start = datetime.now(timezone.utc) + timedelta(minutes=3)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert is_imminent([m]) is False
 
 
 def test_is_imminent_false_when_started() -> None:
     """Meeting already started — _next_upcoming returns None, not imminent."""
-    from waynext import is_imminent, Meeting
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
+
+    from waynext import Meeting, is_imminent
     start = datetime.now(timezone.utc) - timedelta(seconds=10)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert is_imminent([m]) is False

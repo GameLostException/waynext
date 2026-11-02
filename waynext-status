@@ -7,16 +7,16 @@ line with the calendar icon, CSS class, and minutes-until-next-meeting label.
 
 NO GTK imports — runs in <50ms, safe to call every 30s from waybar.
 """
+
 import json
 import os
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-STATE_FILE   = Path(f"/tmp/waynext-state-{os.getuid()}.json")
-CONFIG_FILE  = Path.home() / ".config" / "waynext" / "config.yaml"
-ICON         = "\U000f00ed"   # 󰃭  mdi-calendar
+STATE_FILE = Path(f"/tmp/waynext-state-{os.getuid()}.json")
+CONFIG_FILE = Path.home() / ".config" / "waynext" / "config.yaml"
+ICON = "\U000f00ed"  # 󰃭  mdi-calendar
 
 DEFAULT_DOMAIN = "@example.com"
 
@@ -28,7 +28,7 @@ def load_domain() -> str:
         # Simple line-based parse — avoids importing yaml
         for line in CONFIG_FILE.read_text().splitlines():
             if line.strip().startswith("internal_domain"):
-                return line.split(":", 1)[1].strip().strip('"\'')
+                return line.split(":", 1)[1].strip().strip("\"'")
     except Exception:
         pass
     return DEFAULT_DOMAIN
@@ -41,7 +41,7 @@ def next_meeting(meetings: list[dict]) -> dict | None:
         try:
             if (datetime.fromisoformat(m["start"]) - now).total_seconds() > 0:
                 return m
-        except Exception:
+        except Exception:  # noqa: S112 — skip malformed state-file entries silently
             continue
     return None
 
@@ -51,9 +51,11 @@ def classify(meetings: list[dict], domain: str) -> str:
     if m is None:
         return "blue"
     for a in m.get("attendees", []):
-        if (domain not in a.get("email", "")
-                and not a.get("self")
-                and a.get("responseStatus") != "declined"):
+        if (
+            domain not in a.get("email", "")
+            and not a.get("self")
+            and a.get("responseStatus") != "declined"
+        ):
             return "red"
     return "orange"
 
@@ -64,66 +66,61 @@ def minutes_label(meetings: list[dict]) -> str:
         return ""
     try:
         start = datetime.fromisoformat(m["start"])
-        now   = datetime.now(timezone.utc)
-        mins  = int((start - now).total_seconds() / 60)
+        now = datetime.now(timezone.utc)
+        mins = int((start - now).total_seconds() / 60)
         return f"{mins}m"  # 0m when < 1 min away
     except Exception:
         return ""
 
 
 def is_imminent(meetings: list[dict]) -> bool:
-    """True when the next meeting is less than 1 minute away."""
+    """True when the next meeting is less than 2 minutes away."""
     m = next_meeting(meetings)
     if m is None:
         return False
     try:
         secs = (datetime.fromisoformat(m["start"]) - datetime.now(timezone.utc)).total_seconds()
-        return 0 < secs < 60
+        return 0 < secs < 120
     except Exception:
         return False
 
 
-STATE_MAX_AGE_SEC = 600   # treat state file as stale after 10 minutes
+STATE_MAX_AGE_SEC = 600  # treat state file as stale after 10 minutes
 
 
 def main() -> None:
     if not STATE_FILE.exists():
-        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""},
-                          ensure_ascii=False))
+        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""}, ensure_ascii=False))
         return
 
     # Treat stale state files as missing — prevents showing yesterday's data
     # on startup before the daemon has completed its first fresh fetch.
     age = time.time() - STATE_FILE.stat().st_mtime
     if age > STATE_MAX_AGE_SEC:
-        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""},
-                          ensure_ascii=False))
+        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""}, ensure_ascii=False))
         return
 
     try:
-        data     = json.loads(STATE_FILE.read_text())
-        status   = data.get("status", "not_configured")
+        data = json.loads(STATE_FILE.read_text())
+        status = data.get("status", "not_configured")
         meetings = data.get("meetings", [])
     except Exception:
-        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""},
-                          ensure_ascii=False))
+        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""}, ensure_ascii=False))
         return
 
     if status != "ok":
-        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""},
-                          ensure_ascii=False))
+        print(json.dumps({"text": ICON, "class": "grey", "tooltip": ""}, ensure_ascii=False))
         return
 
-    domain    = load_domain()
+    domain = load_domain()
     css_class = classify(meetings, domain)
-    label     = minutes_label(meetings)
-    text      = f"{ICON} {label}" if label else ICON
+    label = minutes_label(meetings)
+    text = f"{ICON} {label}" if label else ICON
 
     if is_imminent(meetings):
         css_class = f"{css_class} imminent"
 
-    print(json.dumps({"text": text, "class": css_class, "tooltip": ""},
-                      ensure_ascii=False))
+    print(json.dumps({"text": text, "class": css_class, "tooltip": ""}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

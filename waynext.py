@@ -281,7 +281,7 @@ def classify_next_meeting(meetings: list[Meeting], domain: str) -> str:
 def minutes_label(meetings: list[Meeting]) -> str:
     """Return minutes until next upcoming meeting, e.g. '7m'.
 
-    Returns '0m' when the meeting is less than 1 minute away (imminent).
+    Returns '1m' when 60–119 seconds away, '0m' when < 60 seconds away.
     Returns '' when nothing is upcoming.
     """
     m = _next_upcoming(meetings)
@@ -293,12 +293,15 @@ def minutes_label(meetings: list[Meeting]) -> str:
 
 
 def is_imminent(meetings: list[Meeting]) -> bool:
-    """Return True when the next meeting is less than 1 minute away."""
+    """Return True when the next meeting is less than 2 minutes away.
+
+    Triggers the pulse animation when the label shows '1m' or '0m'.
+    """
     m = _next_upcoming(meetings)
     if m is None:
         return False
     secs = (m.start - datetime.now(timezone.utc)).total_seconds()
-    return 0 < secs < 60
+    return 0 < secs < 120
 
 
 def waybar_json(state: CalState, cfg: dict) -> str:
@@ -309,7 +312,7 @@ def waybar_json(state: CalState, cfg: dict) -> str:
         css_class = classify_next_meeting(state.meetings, cfg["internal_domain"])
     label = minutes_label(state.meetings) if state.status == "ok" else ""
     text = f"󰃭 {label}" if label else "󰃭"
-    # Append "imminent" class when < 1 min away so waybar can animate the widget.
+    # Append "imminent" class when < 2 min away so waybar can animate the widget.
     # Waybar supports multiple space-separated classes in the "class" field.
     if state.status == "ok" and is_imminent(state.meetings):
         css_class = f"{css_class} imminent"
@@ -682,7 +685,9 @@ def _browser_addrs_before(browser_class: str) -> set[str]:
     try:
         r = subprocess.run(
             ["hyprctl", "clients", "-j"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True,
+            text=True,
+            timeout=2,
         )
         return {
             c["address"].removeprefix("0x")
@@ -693,7 +698,9 @@ def _browser_addrs_before(browser_class: str) -> set[str]:
         return set()
 
 
-def _wait_for_browser_activation(browser_class: str, known_before: set[str], timeout_s: float) -> str:
+def _wait_for_browser_activation(
+    browser_class: str, known_before: set[str], timeout_s: float
+) -> str:
     """
     Subscribe to the Hyprland event socket and wait for the browser to signal
     it received the URL after xdg-open is called.
@@ -741,7 +748,7 @@ def _wait_for_browser_activation(browser_class: str, known_before: set[str], tim
 
                     # openwindow>>addr,ws,class,title — new window
                     if line.startswith("openwindow>>"):
-                        parts = line[len("openwindow>>"):].split(",", 3)
+                        parts = line[len("openwindow>>") :].split(",", 3)
                         if len(parts) >= 3 and browser_class.lower() in parts[2].lower():
                             addr_raw = parts[0]
                             addr = addr_raw if addr_raw.startswith("0x") else f"0x{addr_raw}"
@@ -750,14 +757,14 @@ def _wait_for_browser_activation(browser_class: str, known_before: set[str], tim
 
                     # urgent>>addr — browser requests attention for new tab (primary)
                     elif line.startswith("urgent>>"):
-                        addr_raw = line[len("urgent>>"):].strip()
+                        addr_raw = line[len("urgent>>") :].strip()
                         if addr_raw in known_before:
                             log.info("urgent from browser: addr=%s", addr_raw)
                             return f"0x{addr_raw}"
 
                     # windowtitle>>addr — title update on browser window (fallback)
                     elif line.startswith("windowtitle>>"):
-                        addr_raw = line[len("windowtitle>>"):].strip()
+                        addr_raw = line[len("windowtitle>>") :].strip()
                         if addr_raw in known_before:
                             log.info("windowtitle from browser: addr=%s", addr_raw)
                             return f"0x{addr_raw}"
@@ -793,7 +800,7 @@ class WayNextWindow(Gtk.Window):
         Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.RIGHT, True)
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.TOP, MARGIN_TOP)
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.RIGHT, self._calc_margin_right())
-        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
+        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.NONE)
         self.set_default_size(POPUP_WIDTH, -1)
         self.set_decorated(False)
 
@@ -845,11 +852,6 @@ class WayNextWindow(Gtk.Window):
         self._settings_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
         self._settings_revealer.set_transition_duration(150)
         outer.append(self._settings_revealer)
-
-        # Escape to close
-        key_ctrl = Gtk.EventControllerKey()
-        key_ctrl.connect("key-pressed", self._on_key)
-        self.add_controller(key_ctrl)
 
         # Auto-hide on mouse leave (mirrors wayblue behaviour)
         motion = Gtk.EventControllerMotion()
@@ -1238,7 +1240,7 @@ class WayNextWindow(Gtk.Window):
     def _schedule_imminent_signal(self, state: CalState) -> None:
         """
         Schedule a one-shot GLib timer to send SIGRTMIN+1 to waybar exactly
-        when the next meeting is 60s away (transitions into imminent state).
+        when the next meeting is 120s away (transitions into imminent state).
 
         waybar's custom/waynext module has signal:1, so SIGRTMIN+1 causes it
         to immediately re-execute waynext-status and update the widget — no
@@ -1259,10 +1261,11 @@ class WayNextWindow(Gtk.Window):
             return
 
         secs_until = (m.start - datetime.now(timezone.utc)).total_seconds()
-        # Schedule signal for 60s before start (transition into imminent state).
+        # Schedule signal for 120s before start (transition into imminent state).
         # Also schedule one for start-time itself (transition out of imminent).
-        delay_to_imminent = secs_until - 60
+        delay_to_imminent = secs_until - 120
         if 0 < delay_to_imminent < 3600:
+
             def _fire_imminent() -> bool:
                 log.info("imminent threshold reached — signalling waybar")
                 subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
@@ -1270,9 +1273,11 @@ class WayNextWindow(Gtk.Window):
                 # Schedule another signal at start time to clear imminent state
                 secs_left = (m.start - datetime.now(timezone.utc)).total_seconds()
                 if 0 < secs_left < 120:
+
                     def _fire_start() -> bool:
                         subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
                         return False
+
                     GLib.timeout_add_seconds(max(1, int(secs_left)), _fire_start)
                 return False  # one-shot
 
@@ -1280,7 +1285,7 @@ class WayNextWindow(Gtk.Window):
                 max(1, int(delay_to_imminent)), _fire_imminent
             )
             log.info("imminent signal scheduled in %.0fs", delay_to_imminent)
-        elif 0 < secs_until <= 60:
+        elif 0 < secs_until <= 120:
             # Already in imminent window — signal immediately
             subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
 
@@ -1295,19 +1300,13 @@ class WayNextWindow(Gtk.Window):
     def _schedule_hide(self) -> None:
         """Schedule auto-hide 1000ms after mouse leaves the popup."""
         self._cancel_hide()
-        self._hide_timer_id = GLib.timeout_add(1000, self._do_hide)
+        self._hide_timer_id = GLib.timeout_add(500, self._do_hide)
 
     def _do_hide(self) -> None:
         self._cancel_hide()
         self.set_visible(False)
         if self._settings_open:
             self._close_settings(save=False)
-
-    def _on_key(self, _ctrl, keyval: int, *_args) -> bool:
-        if keyval == Gdk.KEY_Escape:
-            self._do_hide()
-            return True
-        return False
 
     # ── Utilities ─────────────────────────────────────────────────────────────
 
@@ -1430,7 +1429,9 @@ class WayNextWindow(Gtk.Window):
                 try:
                     desktop_file = subprocess.run(
                         ["xdg-settings", "get", "default-web-browser"],
-                        capture_output=True, text=True, timeout=2,
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
                     ).stdout.strip()
                     browser_class = desktop_file.removesuffix(".desktop")
                 except Exception:

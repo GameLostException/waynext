@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-STATE_FILE = Path(f"/tmp/waynext-state-{os.getuid()}.json")
+STATE_FILE = Path(f"/tmp/waynext-state-{os.getuid()}.json")  # nosec B108 — UID-scoped state file
 CONFIG_FILE = Path.home() / ".config" / "waynext" / "config.yaml"
 ICON = "\U000f00ed"  # 󰃭  mdi-calendar
 

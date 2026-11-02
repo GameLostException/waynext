@@ -5,6 +5,7 @@ These functions are module-level so they can be tested without a GTK display.
 The socket watcher is tested via a local Unix socket server that emits
 synthetic Hyprland events.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,10 +26,12 @@ def _make_clients(entries: list[dict]) -> str:
 
 
 def test_browser_addrs_strips_0x_prefix():
-    clients = _make_clients([
-        {"address": "0xdeadbeef", "class": "google-chrome"},
-        {"address": "0x12345678", "class": "google-chrome"},
-    ])
+    clients = _make_clients(
+        [
+            {"address": "0xdeadbeef", "class": "google-chrome"},
+            {"address": "0x12345678", "class": "google-chrome"},
+        ]
+    )
     with patch("waynext.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout=clients)
         result = _browser_addrs_before("google-chrome")
@@ -36,11 +39,13 @@ def test_browser_addrs_strips_0x_prefix():
 
 
 def test_browser_addrs_filters_by_class():
-    clients = _make_clients([
-        {"address": "0xaaaa0001", "class": "google-chrome"},
-        {"address": "0xaaaa0002", "class": "kitty"},
-        {"address": "0xaaaa0003", "class": "Google-chrome"},  # case-insensitive
-    ])
+    clients = _make_clients(
+        [
+            {"address": "0xaaaa0001", "class": "google-chrome"},
+            {"address": "0xaaaa0002", "class": "kitty"},
+            {"address": "0xaaaa0003", "class": "Google-chrome"},  # case-insensitive
+        ]
+    )
     with patch("waynext.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout=clients)
         result = _browser_addrs_before("google-chrome")
@@ -55,10 +60,12 @@ def test_browser_addrs_returns_empty_on_error():
 
 def test_browser_addrs_empty_class_matches_all():
     """Empty browser_class matches everything — the guard is in _launch, not here."""
-    clients = _make_clients([
-        {"address": "0xaaaa0001", "class": "google-chrome"},
-        {"address": "0xaaaa0002", "class": "kitty"},
-    ])
+    clients = _make_clients(
+        [
+            {"address": "0xaaaa0001", "class": "google-chrome"},
+            {"address": "0xaaaa0002", "class": "kitty"},
+        ]
+    )
     with patch("waynext.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout=clients)
         result = _browser_addrs_before("")

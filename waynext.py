@@ -94,7 +94,7 @@ log = logging.getLogger("waynext")
 APP_ID = "io.github.waynext"
 CONFIG_DIR = Path.home() / ".config" / "waynext"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
-SOCKET_PATH = Path(f"/tmp/waynext-{os.getuid()}.sock")
+SOCKET_PATH = Path(f"/tmp/waynext-{os.getuid()}.sock")  # nosec B108 — UID-scoped IPC socket in /tmp is intentional
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 CACHE_TTL_SEC = 300  # re-fetch Google Calendar at most once every 5 minutes
@@ -512,7 +512,7 @@ class CalWorker:
         # Write state file for the waybar exec subcommand (cmd_status).
         # Runs in the worker thread — write atomically to avoid partial reads.
         try:
-            state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")
+            state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")  # nosec B108 — UID-scoped state file
             payload = {
                 "status": state.status,
                 "account": state.account,
@@ -1550,7 +1550,7 @@ def send_ipc(cmd: str) -> bool:
 
 def cmd_status() -> None:
     """Print waybar JSON and exit. Reads cached state from a temp file."""
-    state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")
+    state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")  # nosec B108 — UID-scoped state file
     cfg = load_config()
 
     if state_file.exists():
@@ -1621,7 +1621,7 @@ def main() -> None:
         # waybar reads it via `waynext-status` and needs it to colour the icon.
         # Touch the state file with status=fetching immediately so the
         # staleness check in waynext-status doesn't fire during the first fetch.
-        _state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")
+        _state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")  # nosec B108 — UID-scoped state file
         try:
             import json as _json
 

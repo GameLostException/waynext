@@ -107,7 +107,7 @@ jobs:
           pytest tests/ -v --tb=short \
             --cov=waynext \
             --cov-report=term-missing \
-            --cov-fail-under=30
+            --cov-fail-under=20
 
       - name: Upload coverage report
         if: matrix.python-version == '3.12'

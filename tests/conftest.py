@@ -10,6 +10,7 @@ PyGObject (gi) is not available in headless CI environments. We mock the
 entire gi namespace before importing waynext so the GTK import block is
 satisfied without a real display.
 """
+
 from __future__ import annotations
 
 import sys

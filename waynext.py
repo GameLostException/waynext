@@ -97,7 +97,8 @@ CONFIG_FILE = CONFIG_DIR / "config.yaml"
 SOCKET_PATH = Path(f"/tmp/waynext-{os.getuid()}.sock")
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-CACHE_TTL_SEC = 60  # re-fetch at most once per minute
+CACHE_TTL_SEC = 300  # re-fetch Google Calendar at most once every 5 minutes
+POLL_INTERVAL_S = 120  # background re-fetch timer interval (2 minutes)
 POPUP_WIDTH = 320
 MARGIN_TOP = 0
 
@@ -130,6 +131,7 @@ VISIO_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 
 DEFAULT_CONFIG: dict = {
     "lookahead_hours": 4,
+    "refresh_interval_min": 2,
     "internal_domain": "@example.com",
     "colours": {
         "no_meetings": "#3daee9",
@@ -279,16 +281,27 @@ def classify_next_meeting(meetings: list[Meeting], domain: str) -> str:
 def minutes_label(meetings: list[Meeting]) -> str:
     """Return minutes until next upcoming meeting, e.g. '7m'.
 
-    Skips meetings already in progress. Returns '' when nothing is upcoming.
+    Returns '1m' when 60–119 seconds away, '0m' when < 60 seconds away.
+    Returns '' when nothing is upcoming.
     """
     m = _next_upcoming(meetings)
     if m is None:
         return ""
     now = datetime.now(timezone.utc)
     mins = int((m.start - now).total_seconds() / 60)
-    if mins <= 0:
-        return ""
-    return f"{mins}m"
+    return f"{mins}m"  # mins==0 means < 1 min away → show "0m"
+
+
+def is_imminent(meetings: list[Meeting]) -> bool:
+    """Return True when the next meeting is less than 2 minutes away.
+
+    Triggers the pulse animation when the label shows '1m' or '0m'.
+    """
+    m = _next_upcoming(meetings)
+    if m is None:
+        return False
+    secs = (m.start - datetime.now(timezone.utc)).total_seconds()
+    return 0 < secs < 120
 
 
 def waybar_json(state: CalState, cfg: dict) -> str:
@@ -299,6 +312,10 @@ def waybar_json(state: CalState, cfg: dict) -> str:
         css_class = classify_next_meeting(state.meetings, cfg["internal_domain"])
     label = minutes_label(state.meetings) if state.status == "ok" else ""
     text = f"󰃭 {label}" if label else "󰃭"
+    # Append "imminent" class when < 2 min away so waybar can animate the widget.
+    # Waybar supports multiple space-separated classes in the "class" field.
+    if state.status == "ok" and is_imminent(state.meetings):
+        css_class = f"{css_class} imminent"
     return json.dumps({"text": text, "class": css_class, "tooltip": ""}, ensure_ascii=False)
 
 
@@ -356,7 +373,8 @@ class CalWorker:
     def fetch_if_stale(self) -> None:
         with self._lock:
             age = time.time() - self._state.fetched_at
-        if age > CACHE_TTL_SEC:
+            ttl = int(self._cfg.get("refresh_interval_min", 2)) * 60
+        if age > ttl:
             self.fetch()
 
     # ── Internal ──────────────────────────────────────────────────────────────
@@ -534,6 +552,15 @@ def _parse_dt(raw: dict) -> datetime | None:
 # ── GTK4 popup window ─────────────────────────────────────────────────────────
 
 CSS = """
+/* Transparent window surface — Adwaita adds .background class which must be
+   explicitly overridden to allow the inner box border-radius to show through */
+window,
+window.background,
+.wn-transparent {
+    background-color: transparent;
+    background-image: none;
+}
+
 .wn-main {
     background-color: @window_bg_color;
     border-radius: 8px;
@@ -542,9 +569,9 @@ CSS = """
     padding: 8px 12px;
     border-bottom: 1px solid alpha(@borders, 0.5);
 }
-.wn-status-dot-ok     { color: #57c75a; font-size: 10px; }
-.wn-status-dot-error  { color: #cc3333; font-size: 10px; }
-.wn-status-dot-none   { color: #888888; font-size: 10px; }
+.wn-status-dot-ok     { color: #57c75a; font-size: 16px; }
+.wn-status-dot-error  { color: #cc3333; font-size: 16px; }
+.wn-status-dot-none   { color: #888888; font-size: 16px; }
 .wn-status-text {
     font-size: 12px;
     color: @dim-label-color;
@@ -554,6 +581,7 @@ CSS = """
     border-radius: 4px;
     min-width: 0;
     min-height: 0;
+    font-size: 16px;
 }
 .wn-meeting-row {
     padding: 7px 12px;
@@ -586,7 +614,7 @@ CSS = """
     min-width: 0;
     min-height: 0;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 16px;
 }
 .wn-visio-btn-grey { color: alpha(#c5c8c6, 0.3); }
 .wn-empty-label {
@@ -621,6 +649,131 @@ CSS = """
 """
 
 
+# ── Browser focus helpers ─────────────────────────────────────────────────────
+
+
+def _hypr_socket2_path() -> str | None:
+    """Resolve the Hyprland event socket2 path."""
+    uid = os.getuid()
+    base = Path(f"/run/user/{uid}/hypr")
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    if sig:
+        candidate = base / sig / ".socket2.sock"
+        if candidate.exists():
+            return str(candidate)
+    try:
+        dirs = sorted(
+            (d for d in base.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for d in dirs:
+            c = d / ".socket2.sock"
+            if c.exists():
+                return str(c)
+    except Exception:
+        pass
+    return None
+
+
+def _browser_addrs_before(browser_class: str) -> set[str]:
+    """
+    Return the set of raw (no-0x) addresses of all current browser windows.
+    Called before xdg-open so we can match urgent/windowtitle events that
+    carry addresses without the 0x prefix.
+    """
+    try:
+        r = subprocess.run(
+            ["hyprctl", "clients", "-j"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return {
+            c["address"].removeprefix("0x")
+            for c in json.loads(r.stdout)
+            if browser_class.lower() in (c.get("class") or "").lower()
+        }
+    except Exception:
+        return set()
+
+
+def _wait_for_browser_activation(
+    browser_class: str, known_before: set[str], timeout_s: float
+) -> str:
+    """
+    Subscribe to the Hyprland event socket and wait for the browser to signal
+    it received the URL after xdg-open is called.
+
+    Chrome does NOT emit activewindow when opening a URL in an existing window.
+    Instead it emits:
+      urgent>>addr        — immediately when the new tab opens
+      windowtitle>>addr   — when the page title updates (fallback)
+
+    Both carry the raw address without 0x prefix. We match against
+    known_before (browser addresses snapshotted before xdg-open).
+
+    For a brand-new browser window, openwindow>>addr,ws,class,title fires.
+
+    Returns "0x<addr>" to pass to focuswindow, or "" on timeout.
+    focuswindow address: is display-agnostic — it follows the window to
+    whatever monitor/workspace it lives on.
+    """
+    import select as _select
+
+    sock_path = _hypr_socket2_path()
+    if not sock_path:
+        log.warning("Hyprland socket2 not found — cannot watch for browser activation")
+        return ""
+
+    deadline = time.monotonic() + timeout_s
+    buf = ""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.connect(sock_path)
+            s.setblocking(False)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                ready, _, _ = _select.select([s], [], [], remaining)
+                if not ready:
+                    break
+                chunk = s.recv(4096).decode("utf-8", errors="replace")
+                if not chunk:
+                    break
+                buf += chunk
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+
+                    # openwindow>>addr,ws,class,title — new window
+                    if line.startswith("openwindow>>"):
+                        parts = line[len("openwindow>>") :].split(",", 3)
+                        if len(parts) >= 3 and browser_class.lower() in parts[2].lower():
+                            addr_raw = parts[0]
+                            addr = addr_raw if addr_raw.startswith("0x") else f"0x{addr_raw}"
+                            log.info("openwindow: addr=%s", addr)
+                            return addr
+
+                    # urgent>>addr — browser requests attention for new tab (primary)
+                    elif line.startswith("urgent>>"):
+                        addr_raw = line[len("urgent>>") :].strip()
+                        if addr_raw in known_before:
+                            log.info("urgent from browser: addr=%s", addr_raw)
+                            return f"0x{addr_raw}"
+
+                    # windowtitle>>addr — title update on browser window (fallback)
+                    elif line.startswith("windowtitle>>"):
+                        addr_raw = line[len("windowtitle>>") :].strip()
+                        if addr_raw in known_before:
+                            log.info("windowtitle from browser: addr=%s", addr_raw)
+                            return f"0x{addr_raw}"
+
+    except Exception as e:
+        log.warning("socket watch error: %s", e)
+    return ""
+
+
 class WayNextWindow(Gtk.Window):
     """GTK4 popup window for waynext."""
 
@@ -642,12 +795,14 @@ class WayNextWindow(Gtk.Window):
     def _setup_layer_shell(self) -> None:
         Gtk4LayerShell.init_for_window(self)
         Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
+        Gtk4LayerShell.set_namespace(self, "waynext")
         Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.TOP, True)
         Gtk4LayerShell.set_anchor(self, Gtk4LayerShell.Edge.RIGHT, True)
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.TOP, MARGIN_TOP)
         Gtk4LayerShell.set_margin(self, Gtk4LayerShell.Edge.RIGHT, self._calc_margin_right())
-        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.ON_DEMAND)
+        Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.NONE)
         self.set_default_size(POPUP_WIDTH, -1)
+        self.set_decorated(False)
 
     def _calc_margin_right(self) -> int:
         """Return right margin so the popup sits flush against the right edge of the bar.
@@ -675,8 +830,12 @@ class WayNextWindow(Gtk.Window):
         self.set_decorated(False)
         self.set_resizable(False)
 
+        self.set_decorated(False)
+        self.add_css_class("wn-transparent")
+
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         outer.add_css_class("wn-main")
+        outer.set_overflow(Gtk.Overflow.HIDDEN)  # clip children to border-radius
         self.set_child(outer)
 
         # Status row
@@ -694,18 +853,15 @@ class WayNextWindow(Gtk.Window):
         self._settings_revealer.set_transition_duration(150)
         outer.append(self._settings_revealer)
 
-        # Auto-hide on mouse leave
+        # Auto-hide on mouse leave (mirrors wayblue behaviour)
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", lambda *_: self._cancel_hide())
         motion.connect("leave", lambda *_: self._schedule_hide())
         self.add_controller(motion)
 
-        # Escape to close
-        key_ctrl = Gtk.EventControllerKey()
-        key_ctrl.connect("key-pressed", self._on_key)
-        self.add_controller(key_ctrl)
-
-        self._hide_timer: int | None = None
+        self._poll_timer_id: int | None = None
+        self._imminent_timer_id: int = 0
+        self._hide_timer_id: int = 0
 
     def _build_status_row(self) -> Gtk.Box:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -727,6 +883,12 @@ class WayNextWindow(Gtk.Window):
         gear_btn.add_css_class("flat")
         gear_btn.connect("clicked", self._toggle_settings)
         row.append(gear_btn)
+
+        help_btn = Gtk.Button(label="?")
+        help_btn.add_css_class("wn-gear-btn")
+        help_btn.add_css_class("flat")
+        help_btn.connect("clicked", lambda _: self._open_help())
+        row.append(help_btn)
 
         return row
 
@@ -772,8 +934,8 @@ class WayNextWindow(Gtk.Window):
         left_btn.set_child(left_box)
         box.append(left_btn)
 
-        # Visio open button — 󰏌 open-in-new icon
-        visio_btn = Gtk.Button(label="󰏌")
+        # Visio open button — 󰕧 phone-in-talk icon
+        visio_btn = Gtk.Button(label="󰕧")
         visio_btn.add_css_class("wn-visio-btn")
         visio_btn.add_css_class("flat")
         # Copy-to-clipboard button — 󰆏 content-copy icon
@@ -793,8 +955,6 @@ class WayNextWindow(Gtk.Window):
         lbr.set_child(box)
         lbr.set_activatable(False)
         lbr.set_can_focus(False)
-
-        return lbr
 
         return lbr
 
@@ -882,6 +1042,35 @@ class WayNextWindow(Gtk.Window):
         )
         panel.append(_row("Lookahead (hours)", spin))
 
+        # Refresh interval
+        max_refresh = self._cfg["lookahead_hours"] * 60
+        refresh_spin = Gtk.SpinButton()
+        refresh_spin.set_adjustment(
+            Gtk.Adjustment(
+                value=self._cfg.get("refresh_interval_min", 2),
+                lower=1,
+                upper=max_refresh,
+                step_increment=1,
+            )
+        )
+        # Keep max in sync when lookahead changes
+        spin.connect(
+            "value-changed",
+            lambda w, rs=refresh_spin: rs.set_adjustment(
+                Gtk.Adjustment(
+                    value=min(rs.get_value(), w.get_value() * 60),
+                    lower=1,
+                    upper=int(w.get_value()) * 60,
+                    step_increment=1,
+                )
+            ),
+        )
+        refresh_spin.connect(
+            "value-changed",
+            lambda w: self._settings_draft.update({"refresh_interval_min": int(w.get_value())}),
+        )
+        panel.append(_row("Refresh interval (min)", refresh_spin))
+
         # Internal domain
         domain_entry = Gtk.Entry()
         domain_entry.set_text(self._cfg["internal_domain"])
@@ -894,9 +1083,9 @@ class WayNextWindow(Gtk.Window):
         # Colour pickers
         colours = self._cfg["colours"]
         colour_fields = [
-            ("no_meetings", "Colour — no meetings"),
-            ("internal_only", "Colour — internal only"),
-            ("has_externals", "Colour — has externals"),
+            ("no_meetings", "No meeting ahead"),
+            ("internal_only", "Internal meeting"),
+            ("has_externals", "External meeting"),
         ]
         for key, label_text in colour_fields:
             btn = Gtk.ColorButton()
@@ -969,6 +1158,7 @@ class WayNextWindow(Gtk.Window):
             save_config(self._cfg)
             self._cal.reload_config()
             self._cal.fetch()
+            self._start_poll_timer()  # reschedule with new interval
 
     @staticmethod
     def _rgba_to_hex(rgba: Gdk.RGBA) -> str:
@@ -982,6 +1172,7 @@ class WayNextWindow(Gtk.Window):
     def _on_cal_update(self, state: CalState) -> None:
         self._refresh_status(state)
         self._refresh_meetings(state)
+        self._schedule_imminent_signal(state)
 
     def _refresh_status(self, state: CalState) -> None:
         if state.status == "ok":
@@ -1017,37 +1208,105 @@ class WayNextWindow(Gtk.Window):
         if not state.meetings:
             lbr = Gtk.ListBoxRow()
             lbr.set_activatable(False)
-            lbl = Gtk.Label(label="No upcoming meetings")
+            lbl = Gtk.Label(label=f"No meetings in the next {self._cfg['lookahead_hours']}h")
             lbl.add_css_class("wn-empty-label")
             lbr.set_child(lbl)
             self._list_box.append(lbr)
             return
 
-        for m in state.meetings:
+        # Show at most 1 past/in-progress meeting (the current one),
+        # then all upcoming meetings.
+        now = datetime.now(timezone.utc)
+        past = [m for m in state.meetings if (m.start - now).total_seconds() <= 0]
+        upcoming = [m for m in state.meetings if (m.start - now).total_seconds() > 0]
+        visible = past[-1:] + upcoming  # last past (current) + all future
+
+        for m in visible:
             self._list_box.append(self._build_meeting_row(m, self._cfg["internal_domain"]))
+
+    def _start_poll_timer(self) -> None:
+        """Start (or restart) the background calendar poll timer from config."""
+        if self._poll_timer_id is not None:
+            GLib.source_remove(self._poll_timer_id)
+        interval_s = int(self._cfg.get("refresh_interval_min", 2)) * 60
+
+        def _tick() -> bool:
+            self._cal.fetch_if_stale()
+            return True
+
+        self._poll_timer_id = GLib.timeout_add_seconds(interval_s, _tick)
+        log.info("poll timer set to every %ds", interval_s)
+
+    def _schedule_imminent_signal(self, state: CalState) -> None:
+        """
+        Schedule a one-shot GLib timer to send SIGRTMIN+1 to waybar exactly
+        when the next meeting is 120s away (transitions into imminent state).
+
+        waybar's custom/waynext module has signal:1, so SIGRTMIN+1 causes it
+        to immediately re-execute waynext-status and update the widget — no
+        need to wait for the 30s poll interval.
+
+        Called on every calendar update so the timer is always fresh.
+        """
+        # Cancel any previously scheduled imminent timer
+        if hasattr(self, "_imminent_timer_id") and self._imminent_timer_id:
+            GLib.source_remove(self._imminent_timer_id)
+            self._imminent_timer_id = 0
+
+        if state.status != "ok":
+            return
+
+        m = _next_upcoming(state.meetings)
+        if m is None:
+            return
+
+        secs_until = (m.start - datetime.now(timezone.utc)).total_seconds()
+        # Schedule signal for 120s before start (transition into imminent state).
+        # Also schedule one for start-time itself (transition out of imminent).
+        delay_to_imminent = secs_until - 120
+        if 0 < delay_to_imminent < 3600:
+
+            def _fire_imminent() -> bool:
+                log.info("imminent threshold reached — signalling waybar")
+                subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
+                self._imminent_timer_id = 0
+                # Schedule another signal at start time to clear imminent state
+                secs_left = (m.start - datetime.now(timezone.utc)).total_seconds()
+                if 0 < secs_left < 120:
+
+                    def _fire_start() -> bool:
+                        subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
+                        return False
+
+                    GLib.timeout_add_seconds(max(1, int(secs_left)), _fire_start)
+                return False  # one-shot
+
+            self._imminent_timer_id = GLib.timeout_add_seconds(
+                max(1, int(delay_to_imminent)), _fire_imminent
+            )
+            log.info("imminent signal scheduled in %.0fs", delay_to_imminent)
+        elif 0 < secs_until <= 120:
+            # Already in imminent window — signal immediately
+            subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────
 
-    def _schedule_hide(self) -> None:
-        self._cancel_hide()
-        self._hide_timer = GLib.timeout_add(600, self._do_hide)
-
     def _cancel_hide(self) -> None:
-        if self._hide_timer is not None:
-            GLib.source_remove(self._hide_timer)
-            self._hide_timer = None
+        """Cancel any pending mouse-leave auto-hide."""
+        if self._hide_timer_id:
+            GLib.source_remove(self._hide_timer_id)
+            self._hide_timer_id = 0
 
-    def _do_hide(self) -> bool:
+    def _schedule_hide(self) -> None:
+        """Schedule auto-hide 1000ms after mouse leaves the popup."""
+        self._cancel_hide()
+        self._hide_timer_id = GLib.timeout_add(500, self._do_hide)
+
+    def _do_hide(self) -> None:
+        self._cancel_hide()
         self.set_visible(False)
         if self._settings_open:
             self._close_settings(save=False)
-        return False
-
-    def _on_key(self, _ctrl, keyval: int, *_args) -> bool:
-        if keyval == Gdk.KEY_Escape:
-            self._do_hide()
-            return True
-        return False
 
     # ── Utilities ─────────────────────────────────────────────────────────────
 
@@ -1080,6 +1339,66 @@ class WayNextWindow(Gtk.Window):
 
         threading.Thread(target=_do, daemon=True).start()
 
+    def _open_help(self) -> None:
+        """Render README.md to a temp HTML file and open it in the browser."""
+        readme = Path(__file__).parent / "README.md"
+        if not readme.exists():
+            # Fallback: look relative to the installed binary
+            readme = Path.home() / "Lab" / "waynext" / "README.md"
+        if not readme.exists():
+            log.warning("README.md not found for help page")
+            return
+
+        def _render() -> None:
+            try:
+                import tempfile
+
+                import markdown  # type: ignore[import-untyped]
+
+                md_text = readme.read_text(encoding="utf-8")
+                body = markdown.markdown(
+                    md_text,
+                    extensions=["fenced_code", "tables", "toc"],
+                )
+                html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WayNext — Help</title>
+<style>
+  body {{ font-family: sans-serif; max-width: 860px; margin: 2em auto;
+         padding: 0 1em; background: #1d1f21; color: #c5c8c6; line-height: 1.6; }}
+  h1, h2, h3 {{ color: #81a2be; border-bottom: 1px solid #373b41; padding-bottom: .3em; }}
+  code {{ background: #282a2e; padding: .15em .4em; border-radius: 3px; font-size: .9em; }}
+  pre {{ background: #282a2e; padding: 1em; border-radius: 5px; overflow-x: auto; }}
+  pre code {{ background: none; padding: 0; }}
+  a {{ color: #8abeb7; }}
+  table {{ border-collapse: collapse; width: 100%; }}
+  th, td {{ border: 1px solid #373b41; padding: .5em .8em; }}
+  th {{ background: #282a2e; }}
+</style>
+</head>
+<body>{body}</body>
+</html>"""
+                tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115
+                    suffix=".html", prefix="waynext-help-", delete=False, mode="w", encoding="utf-8"
+                )
+                with tmp:
+                    tmp.write(html)
+                tmp_path = tmp.name
+                log.info("help HTML written to %s", tmp_path)
+
+                def _open_help_url(p: str = tmp_path) -> bool:
+                    self._open_url(f"file://{p}")
+                    return False
+
+                GLib.idle_add(_open_help_url)
+            except Exception as e:
+                log.error("help render failed: %s", e)
+
+        threading.Thread(target=_render, daemon=True).start()
+
     def _open_url(self, url: str) -> None:
         log.info("_open_url: %s", url)
 
@@ -1102,23 +1421,11 @@ class WayNextWindow(Gtk.Window):
             ),
             "MOZ_ENABLE_WAYLAND": "1",
         }
-        # Remove empty values
         clean_env = {k: v for k, v in clean_env.items() if v}
 
         def _launch() -> None:
             try:
-                subprocess.Popen(
-                    ["xdg-open", url],
-                    env=clean_env,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-                log.info("xdg-open launched cleanly")
-                # Focus the browser window via Hyprland after a short delay.
-                # Derive the window class from the default browser's .desktop
-                # file name rather than hardcoding browser names.
-                time.sleep(1.2)
+                # Derive browser window class from xdg-settings (browser-agnostic).
                 try:
                     desktop_file = subprocess.run(
                         ["xdg-settings", "get", "default-web-browser"],
@@ -1126,18 +1433,42 @@ class WayNextWindow(Gtk.Window):
                         text=True,
                         timeout=2,
                     ).stdout.strip()
-                    # Desktop file is e.g. "firefox.desktop" or
-                    # "google-chrome.desktop" — strip the extension for the
-                    # window class (Hyprland class typically matches).
-                    window_class = desktop_file.removesuffix(".desktop")
-                    if window_class:
-                        subprocess.run(
-                            ["hyprctl", "dispatch", "focuswindow", f"class:{window_class}"],
-                            capture_output=True,
-                        )
-                        log.info("focused window class:%s", window_class)
-                except Exception as e:
-                    log.warning("could not focus browser: %s", e)
+                    browser_class = desktop_file.removesuffix(".desktop")
+                except Exception:
+                    browser_class = ""
+
+                # Snapshot existing browser window addresses before opening so
+                # the socket watcher can match urgent/windowtitle events.
+                known_before = _browser_addrs_before(browser_class) if browser_class else set()
+
+                subprocess.Popen(
+                    ["xdg-open", url],
+                    env=clean_env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                log.info("xdg-open launched")
+
+                if not browser_class:
+                    log.info("no browser class detected — skipping focus")
+                    return
+
+                # Wait for the browser to signal it received the URL.
+                # Event-driven via Hyprland socket — no polling, no sleep.
+                # Timeout of 4s is a pure safety net.
+                addr = _wait_for_browser_activation(browser_class, known_before, timeout_s=4.0)
+
+                if addr:
+                    # focuswindow address: follows the window to its monitor/workspace
+                    subprocess.run(
+                        ["hyprctl", "dispatch", "focuswindow", f"address:{addr}"],
+                        capture_output=True,
+                    )
+                    log.info("focused browser window address:%s", addr)
+                else:
+                    log.info("browser activation not detected within timeout — no focus change")
+
             except Exception as e:
                 log.error("xdg-open error: %s", e)
 
@@ -1196,6 +1527,7 @@ class IPCServer:
 
     def _show(self) -> None:
         win = self._window
+        win._cancel_hide()
         win.set_visible(True)
         win.present()
         win.poll()
@@ -1286,12 +1618,30 @@ def main() -> None:
         IPCServer(window)
 
         # Always fetch on startup so the state file is written immediately —
-        # waybar reads it via `waynext status` and needs it to colour the icon.
+        # waybar reads it via `waynext-status` and needs it to colour the icon.
+        # Touch the state file with status=fetching immediately so the
+        # staleness check in waynext-status doesn't fire during the first fetch.
+        _state_file = Path(f"/tmp/waynext-state-{os.getuid()}.json")
+        try:
+            import json as _json
+
+            _state_file.write_text(_json.dumps({"status": "fetching", "meetings": []}))
+        except Exception:
+            pass
         window._cal.fetch()
 
-        if cmd in ("show", "toggle"):
-            window.set_visible(True)
-            window.present()
+        # Background polling — re-fetch calendar periodically.
+        # Interval comes from config (refresh_interval_min), rescheduled on save.
+        window._start_poll_timer()
+
+        # Always realize the window at startup — a layer-shell window that has
+        # never been presented cannot be shown later via set_visible(True).
+        # Present it, then hide after one GLib iteration if not requested,
+        # giving GTK time to map the surface with the compositor.
+        window.set_visible(True)
+        window.present()
+        if cmd not in ("show", "toggle"):
+            GLib.timeout_add(100, lambda: (window._do_hide(), False)[1])
 
     app.connect("activate", on_activate)
     app.run([])

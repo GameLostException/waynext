@@ -13,6 +13,7 @@ import yaml
 
 DEFAULTS = {
     "lookahead_hours": 4,
+    "refresh_interval_min": 2,
     "internal_domain": "@example.com",
     "colours": {
         "no_meetings": "#3daee9",
@@ -83,3 +84,15 @@ def test_empty_file_gives_defaults(tmp_path: Path) -> None:
     p.write_text("")
     cfg = load_config(p)
     assert cfg["lookahead_hours"] == 4
+
+
+def test_refresh_interval_default(tmp_path: Path) -> None:
+    cfg = load_config(tmp_path / "config.yaml")
+    assert cfg["refresh_interval_min"] == 2
+
+
+def test_refresh_interval_override(tmp_path: Path) -> None:
+    p = tmp_path / "config.yaml"
+    p.write_text("refresh_interval_min: 5\n")
+    cfg = load_config(p)
+    assert cfg["refresh_interval_min"] == 5

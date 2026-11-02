@@ -1641,7 +1641,12 @@ def main() -> None:
         window.set_visible(True)
         window.present()
         if cmd not in ("show", "toggle"):
-            GLib.timeout_add(100, lambda: (window._do_hide(), False)[1])
+
+            def _hide_once() -> bool:
+                window._do_hide()
+                return False
+
+            GLib.timeout_add(100, _hide_once)
 
     app.connect("activate", on_activate)
     app.run([])

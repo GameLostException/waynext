@@ -19,7 +19,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install ruff
-        run: pip install ruff==0.4.4
+        run: pip install ruff==0.16.6
 
       - name: Ruff check
         run: ruff check .
@@ -48,6 +48,40 @@ jobs:
       - name: mypy
         run: mypy waynext.py --ignore-missing-imports
 
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bandit
+        run: pip install bandit==1.8.5
+
+      - name: Bandit scan
+        # B603/B607: subprocess calls are intentional (xdg-open, hyprctl, pkill).
+        # B106: no hardcoded passwords — false positive on OAuth flow parameter names.
+        run: |
+          bandit -r waynext.py waynext-status \
+            --skip B603,B607,B106 \
+            --severity-level medium \
+            --confidence-level medium
+
+      - name: Check for committed secrets
+        run: |
+          # Fail if any credential files were accidentally staged
+          for f in client_secret.json token.json credentials.json .env; do
+            if git ls-files --error-unmatch "$f" 2>/dev/null; then
+              echo "ERROR: $f is tracked by git — remove it immediately"
+              exit 1
+            fi
+          done
+          echo "No credential files tracked."
+
   test:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -68,5 +102,17 @@ jobs:
           pip install pytest pytest-cov
           pip install PyYAML google-api-python-client google-auth-oauthlib google-auth-httplib2
 
-      - name: Run tests
-        run: pytest tests/ -v --tb=short --cov=waynext --cov-report=term-missing
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --tb=short \
+            --cov=waynext \
+            --cov-report=term-missing \
+            --cov-fail-under=30
+
+      - name: Upload coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: .coverage
+          retention-days: 7

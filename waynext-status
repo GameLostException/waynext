@@ -54,6 +54,7 @@ def classify(meetings: list[dict], domain: str) -> str:
         if (
             domain not in a.get("email", "")
             and not a.get("self")
+            and not a.get("resource")
             and a.get("responseStatus") != "declined"
         ):
             return "red"
@@ -118,7 +119,7 @@ def main() -> None:
     text = f"{ICON} {label}" if label else ICON
 
     if is_imminent(meetings):
-        css_class = f"{css_class} imminent"
+        css_class = f"{css_class}-imminent"
 
     print(json.dumps({"text": text, "class": css_class, "tooltip": ""}, ensure_ascii=False))
 

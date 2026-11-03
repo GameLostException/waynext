@@ -350,3 +350,67 @@ def test_is_imminent_false_when_started() -> None:
     start = datetime.now(timezone.utc) - timedelta(seconds=10)
     m = Meeting("id", "Standup", start, start, "http://x")
     assert is_imminent([m]) is False
+
+
+def test_resource_attendee_does_not_trigger_red() -> None:
+    """Room/resource attendees must not be counted as externals."""
+    from waynext import Meeting, classify_next_meeting
+    from datetime import datetime, timedelta, timezone
+
+    start = datetime.now(timezone.utc) + timedelta(minutes=5)
+    m = Meeting(
+        "id",
+        "All hands",
+        start,
+        start,
+        "http://x",
+        [
+            {
+                "email": "room@resource.calendar.google.com",
+                "resource": True,
+                "responseStatus": "accepted",
+            },
+            {"email": "alice@example.com", "self": False, "responseStatus": "accepted"},
+        ],
+    )
+    assert classify_next_meeting([m], "@example.com") == "orange"
+
+
+def test_resource_with_real_external_still_red() -> None:
+    """Resource attendee excluded but real external still triggers red."""
+    from waynext import Meeting, classify_next_meeting
+    from datetime import datetime, timedelta, timezone
+
+    start = datetime.now(timezone.utc) + timedelta(minutes=5)
+    m = Meeting(
+        "id",
+        "External call",
+        start,
+        start,
+        "http://x",
+        [
+            {
+                "email": "room@resource.calendar.google.com",
+                "resource": True,
+                "responseStatus": "accepted",
+            },
+            {"email": "external@other.com", "self": False, "responseStatus": "accepted"},
+        ],
+    )
+    assert classify_next_meeting([m], "@example.com") == "red"
+
+
+def test_waybar_json_imminent_uses_compound_class() -> None:
+    """waybar_json must emit 'orange-imminent' not 'orange imminent'."""
+    from waynext import CalState, Meeting, waybar_json
+    from datetime import datetime, timedelta, timezone
+
+    start = datetime.now(timezone.utc) + timedelta(seconds=60)
+    m = Meeting("id", "Standup", start, start, "http://x", [])
+    state = CalState(status="ok", meetings=[m])
+    out = waybar_json(state, {"internal_domain": "@example.com"})
+    import json
+
+    data = json.loads(out)
+    assert data["class"] == "orange-imminent"
+    assert " " not in data["class"]  # no space-separated classes

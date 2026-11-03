@@ -273,6 +273,7 @@ def classify_next_meeting(meetings: list[Meeting], domain: str) -> str:
         for a in m.attendees
         if domain not in a.get("email", "")
         and not a.get("self")
+        and not a.get("resource")
         and a.get("responseStatus") != "declined"
     ]
     return "red" if external else "orange"
@@ -312,10 +313,11 @@ def waybar_json(state: CalState, cfg: dict) -> str:
         css_class = classify_next_meeting(state.meetings, cfg["internal_domain"])
     label = minutes_label(state.meetings) if state.status == "ok" else ""
     text = f"󰃭 {label}" if label else "󰃭"
-    # Append "imminent" class when < 2 min away so waybar can animate the widget.
-    # Waybar supports multiple space-separated classes in the "class" field.
+    # Append "-imminent" suffix when < 2 min away so waybar can animate the widget.
+    # Waybar 0.15 does not split space-separated classes, so we use a compound
+    # single class (e.g. "orange-imminent") matched by a single CSS rule.
     if state.status == "ok" and is_imminent(state.meetings):
-        css_class = f"{css_class} imminent"
+        css_class = f"{css_class}-imminent"
     return json.dumps({"text": text, "class": css_class, "tooltip": ""}, ensure_ascii=False)
 
 
@@ -1242,9 +1244,8 @@ class WayNextWindow(Gtk.Window):
         Schedule a one-shot GLib timer to send SIGRTMIN+1 to waybar exactly
         when the next meeting is 120s away (transitions into imminent state).
 
-        waybar's custom/waynext module has signal:1, so SIGRTMIN+1 causes it
-        to immediately re-execute waynext-status and update the widget — no
-        need to wait for the 30s poll interval.
+        waybar's custom/waynext module has signal:1 and interval:5, so the
+        blink animation resets every 5s keeping it visually looping.
 
         Called on every calendar update so the timer is always fresh.
         """
@@ -1261,8 +1262,6 @@ class WayNextWindow(Gtk.Window):
             return
 
         secs_until = (m.start - datetime.now(timezone.utc)).total_seconds()
-        # Schedule signal for 120s before start (transition into imminent state).
-        # Also schedule one for start-time itself (transition out of imminent).
         delay_to_imminent = secs_until - 120
         if 0 < delay_to_imminent < 3600:
 
@@ -1270,7 +1269,7 @@ class WayNextWindow(Gtk.Window):
                 log.info("imminent threshold reached — signalling waybar")
                 subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
                 self._imminent_timer_id = 0
-                # Schedule another signal at start time to clear imminent state
+                # Signal again at start time to clear imminent class
                 secs_left = (m.start - datetime.now(timezone.utc)).total_seconds()
                 if 0 < secs_left < 120:
 
@@ -1290,7 +1289,6 @@ class WayNextWindow(Gtk.Window):
             subprocess.run(["pkill", "-RTMIN+1", "waybar"], capture_output=True)
 
     # ── Auto-hide ─────────────────────────────────────────────────────────────
-
     def _cancel_hide(self) -> None:
         """Cancel any pending mouse-leave auto-hide."""
         if self._hide_timer_id:

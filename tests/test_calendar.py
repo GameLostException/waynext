@@ -354,8 +354,9 @@ def test_is_imminent_false_when_started() -> None:
 
 def test_resource_attendee_does_not_trigger_red() -> None:
     """Room/resource attendees must not be counted as externals."""
-    from waynext import Meeting, classify_next_meeting
     from datetime import datetime, timedelta, timezone
+
+    from waynext import Meeting, classify_next_meeting
 
     start = datetime.now(timezone.utc) + timedelta(minutes=5)
     m = Meeting(
@@ -378,8 +379,9 @@ def test_resource_attendee_does_not_trigger_red() -> None:
 
 def test_resource_with_real_external_still_red() -> None:
     """Resource attendee excluded but real external still triggers red."""
-    from waynext import Meeting, classify_next_meeting
     from datetime import datetime, timedelta, timezone
+
+    from waynext import Meeting, classify_next_meeting
 
     start = datetime.now(timezone.utc) + timedelta(minutes=5)
     m = Meeting(
@@ -402,8 +404,9 @@ def test_resource_with_real_external_still_red() -> None:
 
 def test_waybar_json_imminent_uses_compound_class() -> None:
     """waybar_json must emit 'orange-imminent' not 'orange imminent'."""
-    from waynext import CalState, Meeting, waybar_json
     from datetime import datetime, timedelta, timezone
+
+    from waynext import CalState, Meeting, waybar_json
 
     start = datetime.now(timezone.utc) + timedelta(seconds=60)
     m = Meeting("id", "Standup", start, start, "http://x", [])
